@@ -14,7 +14,8 @@
  *   --gap 500           句间静音毫秒
  *   --lead 300          开头静音毫秒
  *   --rate 1.0          语速，>1 更慢（piper 的 length-scale）
- *   --page <pageId>     顺带把音频挂到该页所属的课，并按顺序写回热区的起止时间
+ *   --page <pageId>     把音频挂到该页所属的课，并按顺序写回这一页热区的起止时间
+ *   --lesson <lessonId> 同上，但按页面顺序把时间轴依次分发给整课的所有热区
  *   --teacher 王老师     写库时用的老师姓名
  *
  * 安装 piper（一次性，约 60MB 模型）：
@@ -99,7 +100,8 @@ console.log(`\n${mp3}  ${(t / 1000).toFixed(1)}s  ${size}KB`);
 console.log(`${OUT}.json  ${timings.length} 条时间轴`);
 
 /* ---------- 可选：直接写库 ---------- */
-if (PAGE_ID) {
+const LESSON_ID = opt('lesson', null);
+if (PAGE_ID || LESSON_ID) {
   const call = async (m, p, b, tk) => {
     const r = await fetch(BASE + p, {
       method: m,
@@ -111,21 +113,50 @@ if (PAGE_ID) {
     return j.data;
   };
   const { token } = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TEACHER });
-  const page = await call('GET', `/api/pages/${PAGE_ID}`, null, token);
-  await call('POST', `/api/admin/lessons/${page.lesson.id}/audio`,
-    { base64: fs.readFileSync(mp3).toString('base64'), ext: 'mp3' }, token);
 
-  const hs = page.hotspots;
-  if (hs.length !== timings.length) {
-    console.log(`\n注意：该页有 ${hs.length} 个热区，但生成了 ${timings.length} 条时间轴，按较少的一方对齐`);
+  // 要写的页面列表：给了 --lesson 就取整课，否则就这一页
+  let pageIds;
+  let lessonId = LESSON_ID;
+  if (LESSON_ID) {
+    const books = await call('GET', '/api/books', null, token);
+    let found = null;
+    for (const b of books) {
+      const cat = await call('GET', `/api/books/${b.id}/catalog`, null, token);
+      const l = cat.lessons.find((x) => String(x.id) === String(LESSON_ID));
+      if (l) { found = l; break; }
+    }
+    if (!found) { console.error(`找不到 lesson ${LESSON_ID}`); process.exit(1); }
+    pageIds = found.pages.map((p) => p.id);
+  } else {
+    const page = await call('GET', `/api/pages/${PAGE_ID}`, null, token);
+    lessonId = page.lesson.id;
+    pageIds = [Number(PAGE_ID)];
   }
-  const merged = hs.map((h, i) => ({
-    x: h.x, y: h.y, w: h.w, h: h.h, type: h.type,
-    en: timings[i] ? timings[i].en : h.en,
-    cn: timings[i] ? (timings[i].cn || h.cn) : h.cn,
-    startMs: timings[i] ? timings[i].startMs : 0,
-    endMs: timings[i] ? timings[i].endMs : 0,
-  }));
-  const r = await call('PUT', `/api/admin/pages/${PAGE_ID}/hotspots`, { hotspots: merged }, token);
-  console.log(`已写入：课文音频 + ${r.count} 个热区的时间轴  →  ${BASE}/admin.html`);
+
+  await call('POST', `/api/admin/lessons/${lessonId}/audio`,
+    { base64: fs.readFileSync(mp3).toString('base64'), ext: 'mp3' }, token);
+  console.log(`\n课文音频已挂到 lesson ${lessonId}`);
+
+  // 时间轴按「页面顺序 + 页内热区顺序」依次分发
+  let k = 0, total = 0;
+  for (const pid of pageIds) {
+    const page = await call('GET', `/api/pages/${pid}`, null, token);
+    const merged = page.hotspots.map((h) => {
+      const t = timings[k++];
+      return {
+        x: h.x, y: h.y, w: h.w, h: h.h, type: h.type,
+        en: t ? t.en : h.en,
+        cn: t && t.cn ? t.cn : h.cn,
+        startMs: t ? t.startMs : 0,
+        endMs: t ? t.endMs : 0,
+      };
+    });
+    const r = await call('PUT', `/api/admin/pages/${pid}/hotspots`, { hotspots: merged }, token);
+    total += r.count;
+    console.log(`  第 ${page.page.pageNo} 页  ${r.count} 个热区  ${merged[0] ? (merged[0].startMs / 1000).toFixed(1) : 0}s~${merged[merged.length - 1] ? (merged[merged.length - 1].endMs / 1000).toFixed(1) : 0}s`);
+  }
+  if (k !== timings.length) {
+    console.log(`\n注意：句子 ${timings.length} 条，热区 ${k} 个，多出来的一方被忽略`);
+  }
+  console.log(`共写入 ${total} 个热区的时间轴  →  ${BASE}/admin.html`);
 }

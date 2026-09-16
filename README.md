@@ -124,6 +124,9 @@ node tools/tts_lesson.mjs 课文.txt --out out/lesson1 --rate 1.05
 
 # 直接写进某一页：上传课文音频 + 按顺序回填每个热区的起止毫秒
 node tools/tts_lesson.mjs 课文.txt --out out/lesson1 --page 3
+
+# 整课一次配完：时间轴按「页面顺序 + 页内热区顺序」依次分发给全部热区
+node tools/tts_lesson.mjs 课文.txt --out out/lesson2 --lesson 2
 ```
 
 产出单声道 48kbps mp3（约 0.36MB/分钟）和一份时间轴 JSON。
@@ -222,11 +225,24 @@ npm i playwright                                          # 一次性，用系�
 node tools/record_demo.mjs --out out/demo
 ```
 
-产出 `out/demo.mp4`，约 55 秒、860x1864、H.264+AAC、2MB 左右。
+产出 `out/demo.mp4`，竖屏 860x1864、H.264+AAC，一分钟左右约 3MB。
+
+想在视频里同时展示两套教材（比如自编讲义 + 导入的课本），给第二套音频和时间轴即可：
+
+```bash
+node tools/record_demo.mjs --out out/demo \
+  --timings2 out/lesson2.json --audio2 out/lesson2.mp3 \
+  --book-b 冀教版 --book-page-no 3 --book-offset 15
+```
+
+`--book-offset` 是该页第一个热区在第二套时间轴里的下标（前面几页的热区数之和）。
 
 Playwright 录屏是**没有声音**的，所以脚本会记录每次触发发音的时刻，事后用 ffmpeg
-把课文音频按这些时刻混回去；开头闪一帧纯黑作同步标记，用 `blackdetect` 校准零点，
-避免录制起点漂移导致音画不同步。分镜就写在脚本里，改内容直接改那几行。
+把课文音频按这些时刻混回去；开头闪一帧纯黑作同步标记，用 `blackdetect` 校准零点——
+录制起点每次都会漂移一点（实测 1.16~1.48s 不等），固定偏移量对不齐。
+
+脚本还会在录制前重建一条干净的作业，并在学生提交后**用老师身份调接口真的批改一次**，
+所以"老师批改 → 学生看到评语"这段是真实链路，不是演出来的。分镜写在脚本里，改内容直接改那几行。
 
 ---
 
