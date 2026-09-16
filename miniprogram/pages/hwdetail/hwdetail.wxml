@@ -1,0 +1,25 @@
+<view class="card">
+  <view class="row between"><text class="muted small">{{hw.className}} · {{hw.itemCount}} 句</text>
+    <text class="pill {{hw.status==='reviewed'?'ok':(hw.status==='submitted'?'warn':'todo')}}">
+      {{hw.status==='reviewed'?'已批改':(hw.status==='submitted'?'已提交':'待完成')}}</text></view>
+  <view wx:if="{{hw.note}}" class="small mt">老师说：{{hw.note}}</view>
+  <view wx:if="{{hw.status==='reviewed'}}" class="mt small" style="color:#F59E0B">{{starStr}} <text style="color:#475569">{{hw.reviewText}}</text></view>
+  <view class="btn ghost sm mt" bindtap="openPage">打开课本页</view>
+</view>
+
+<view wx:for="{{items}}" wx:key="hotspotId" class="card">
+  <view class="strong">{{index+1}}. {{item.en}}</view>
+  <view class="muted small">{{item.cn}}</view>
+  <view class="row mt" style="gap:16rpx">
+    <view class="btn sm grey" bindtap="playOrigin" data-idx="{{index}}">原音</view>
+    <view class="btn sm {{item.recPath ? 'ghost' : ''}}" bindtap="recToggle" data-idx="{{index}}">
+      {{recIdx===index ? '停止' : (item.recPath ? '重录' : '跟读')}}</view>
+    <view wx:if="{{item.recPath}}" class="btn sm grey" bindtap="playMine" data-idx="{{index}}">我的</view>
+    <text wx:if="{{item.recPath}}" class="pill ok">已录</text>
+  </view>
+</view>
+
+<view wx:if="{{hw.status!=='reviewed'}}" class="card">
+  <view class="btn" bindtap="submit">提交作业</view>
+</view>
+<view style="height:40rpx"></view>

@@ -1,0 +1,10 @@
+<view wx:for="{{lessons}}" wx:key="id" class="card">
+  <view class="strong">{{item.title}}</view>
+  <view wx:for="{{item.pages}}" wx:for-item="p" wx:key="id" class="row item" bindtap="openPage" data-id="{{p.id}}">
+    <view class="n">{{p.pageNo}}</view>
+    <view class="grow"><view class="strong">第 {{p.pageNo}} 页</view>
+      <view class="muted small">{{p.hotspotCount}} 个点读句</view></view>
+    <text class="muted">›</text>
+  </view>
+</view>
+<view wx:if="{{!lessons.length}}" class="empty">这本书还没有内容</view>

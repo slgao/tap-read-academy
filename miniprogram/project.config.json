@@ -1,0 +1,15 @@
+{
+  "description": "英语点读 + 作业打卡 MVP",
+  "miniprogramRoot": "./",
+  "appid": "touristappid",
+  "projectname": "dianbu-mvp",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true
+  },
+  "compileType": "miniprogram",
+  "libVersion": "3.0.0"
+}

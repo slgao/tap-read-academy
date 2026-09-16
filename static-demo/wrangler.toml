@@ -1,0 +1,11 @@
+name = "dianbu-demo"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# 想挂到自己的域名，取消下面两行注释并改成你的域名
+# routes = [{ pattern = "demo.你的域名.com", custom_domain = true }]

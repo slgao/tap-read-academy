@@ -1,0 +1,7 @@
+<view wx:for="{{list}}" wx:key="id" class="card" bindtap="open" data-id="{{item.id}}">
+  <view class="row between"><text class="strong grow ellip">{{item.title}}</text>
+    <text class="pill {{item.pillCls}}">{{item.pillTxt}}</text></view>
+  <view class="muted small mt">{{item.itemCount}} 句跟读 · {{item.className}}</view>
+  <view wx:if="{{item.status==='reviewed'}}" class="mt small">{{item.starStr}} {{item.reviewText}}</view>
+</view>
+<view wx:if="{{!list.length}}" class="empty">还没有作业</view>

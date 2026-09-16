@@ -1,0 +1,25 @@
+page { background: #F5F7FA; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #0F172A; font-size: 30rpx; }
+.card { background: #fff; border-radius: 24rpx; padding: 28rpx; margin: 0 24rpx 20rpx;
+  box-shadow: 0 2rpx 16rpx rgba(15,23,42,.05); }
+.row { display: flex; align-items: center; }
+.between { justify-content: space-between; }
+.grow { flex: 1; min-width: 0; }
+.muted { color: #94A3B8; font-size: 24rpx; }
+.small { font-size: 24rpx; }
+.strong { font-weight: 600; }
+.ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt { margin-top: 20rpx; }
+.btn { background: #0EA5E9; color: #fff; border-radius: 20rpx; font-size: 30rpx; font-weight: 600;
+  padding: 22rpx; text-align: center; line-height: 1.2; }
+.btn.ghost { background: #E0F2FE; color: #0284C7; }
+.btn.grey { background: #EEF2F6; color: #475569; }
+.btn.sm { padding: 12rpx 22rpx; font-size: 26rpx; border-radius: 16rpx; display: inline-block; }
+.pill { display: inline-block; font-size: 22rpx; padding: 4rpx 16rpx; border-radius: 999rpx;
+  background: #EEF2F6; color: #475569; font-weight: 600; }
+.pill.ok { background: #DCFCE7; color: #15803D; }
+.pill.warn { background: #FEF3C7; color: #B45309; }
+.pill.todo { background: #FEE2E2; color: #B91C1C; }
+.hero { margin: 24rpx; padding: 34rpx; border-radius: 28rpx; color: #fff;
+  background: linear-gradient(140deg, #0EA5E9, #38BDF8); }
+.empty { text-align: center; color: #94A3B8; padding: 120rpx 40rpx; font-size: 26rpx; }

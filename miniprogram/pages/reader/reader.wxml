@@ -1,0 +1,30 @@
+<scroll-view scroll-y class="reader" scroll-into-view="{{scrollTo}}" scroll-with-animation>
+  <view class="pagewrap">
+    <image src="{{imgUrl}}" mode="widthFix" class="pageimg" show-menu-by-longpress="{{false}}"/>
+    <view wx:for="{{hotspots}}" wx:key="id" id="hs{{item.id}}"
+      class="hs {{activeId===item.id ? 'active' : ''}} {{showHs ? 'show' : ''}} {{item.isHw ? 'hw' : ''}}"
+      style="left:{{item.left}}%;top:{{item.top}}%;width:{{item.wp}}%;height:{{item.hp}}%"
+      data-idx="{{index}}" bindtap="tapHs"/>
+  </view>
+  <view style="height:280rpx"></view>
+</scroll-view>
+
+<view class="playbar">
+  <view class="sub-en">{{subEn || '点击句子即可播放'}}</view>
+  <view class="sub-cn">{{showCn ? subCn : ' '}}</view>
+  <view class="row" style="gap:12rpx">
+    <view class="btn sm" bindtap="playAll">{{playingAll ? '停止' : '连播'}}</view>
+    <view class="ic {{repeat ? 'on' : ''}}" bindtap="toggleRepeat">⟳</view>
+    <view class="ic" bindtap="cycleRate" style="font-size:22rpx;font-weight:700">{{rateText}}</view>
+    <view class="ic {{showCn ? 'on' : ''}}" bindtap="toggleCn">译</view>
+    <view class="ic {{showHs ? 'on' : ''}}" bindtap="toggleHs">框</view>
+    <view class="grow"></view>
+    <view class="ic rec {{recording ? 'recording' : ''}}" bindtap="recToggle">录</view>
+    <view wx:if="{{myRecPath}}" class="ic" bindtap="playMyRec">听</view>
+  </view>
+  <view class="row between muted small" style="margin-top:12rpx">
+    <text bindtap="prevPage">{{prevPageId ? '‹ 上一页' : ''}}</text>
+    <text>{{recTip}}</text>
+    <text bindtap="nextPage">{{nextPageId ? '下一页 ›' : ''}}</text>
+  </view>
+</view>

@@ -1,0 +1,15 @@
+<view class="hero">
+<view style="font-size:40rpx;font-weight:600">欢迎来到点读学堂</view>
+  <view class="small" style="opacity:.9;margin-top:8rpx">输入姓名和班级邀请码即可开始</view>
+</view>
+<view class="card">
+  <view class="muted small">我的姓名</view>
+  <input class="inp" value="{{name}}" bindinput="onName" placeholder="例如：李小明"/>
+  <view class="muted small" style="margin-top:24rpx">班级邀请码</view>
+  <input class="inp" value="{{code}}" bindinput="onCode" placeholder="6 位字母数字"/>
+  <view class="btn" style="margin-top:32rpx" bindtap="login">进入学习</view>
+  <view class="muted small" style="text-align:center;margin-top:20rpx">演示：李小明 / 邀请码 DEMO88</view>
+</view>
+<view class="card">
+  <view class="muted small">正式版这里会换成 wx.login + 微信手机号快速验证；MVP 用姓名+邀请码，方便先跑通业务。</view>
+</view>

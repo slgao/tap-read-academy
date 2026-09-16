@@ -1,0 +1,15 @@
+{
+  "name": "dianbu-mvp-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "英语点读+作业打卡 MVP 服务端（零 npm 依赖，只用 Node 内置模块）",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "seed": "node src/seed.js",
+    "reset": "rm -f ../data/app.db ../data/app.db-wal ../data/app.db-shm && node src/seed.js",
+    "test": "node test/e2e.mjs"
+  }
+}
