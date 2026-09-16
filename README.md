@@ -16,7 +16,7 @@
 | **点读数据结构** | 热区用归一化坐标（0~1），换图片分辨率不用重标；音频**一课一个文件 + 起止毫秒**，不切成几千个小片段 |
 | **PDF 自动标注** | `tools/auto_annotate.mjs` 对文字可选中的 PDF 自动生成句子级热区：按「横向重叠 + 纵向相邻 + 字号相近」把文本行聚成块，并排的对话气泡不会串行 |
 | **分层** | `api.js`（业务，零 SQL）→ `repo.js`（数据，唯一写 SQL 的地方）→ `storage.js`（文件）。repo/storage 全是 `async`，将来换成微信云开发时 `api.js` 一行都不用改 |
-| **回归测试** | `npm test --prefix server`，23 项断言，跑完自己清理数据 |
+| **回归测试** | `npm test --prefix server`，24 项断言，跑完自己清理数据 |
 | **静态体验版** | `static-demo/` 无后端、可一条命令部署到 Cloudflare Workers，0 成本，发链接就能演示 |
 
 ---
@@ -47,7 +47,8 @@ cd mvp
 ## 二、5 分钟体验路线
 
 1. **学生端** → 首页 → 教材 → 第 1 页 → **点任意一句**，会朗读并高亮
-   - 右下 `TTS` 按钮可切到 **`原音`**：播放真实 mp3 并按 `startMs~endMs` 精确 seek —— 这就是小程序端的真实逻辑
+   - 右下 `TTS` / `原音` 可切换音源：`原音`播放真实 mp3 并按 `startMs~endMs` 精确 seek，
+     这就是小程序端的真实逻辑；`TTS` 用浏览器语音合成，方便在还没配音时先试交互
    - `连播` 整页连读、`⟳` 单句复读、`1.0×` 变速、`框` 显示热区、`录` 跟读录音
    - 连续读满 60 秒会自动打卡（正式版是 5 分钟）
 2. **老师端** → 作业 → `+ 布置` → 选班级/页面 → 勾几句 → 发布
@@ -107,6 +108,31 @@ node tools/upload_pages.mjs 1 out/handout
 ./tools/audio_norm.sh 原始录音.wav
 ```
 
+### 没有配音怎么办：本地 TTS 自动生成
+
+自编讲义最大的门槛不是排版，是**没有录音**。`tools/tts_lesson.mjs` 用本地神经网络 TTS
+一次解决「配音 + 时间轴」两件事，全程离线，不花钱：
+
+```bash
+# 一次性安装（约 60MB 模型）
+python3 -m venv .ttsenv && ./.ttsenv/bin/pip install piper-tts
+./.ttsenv/bin/python -m piper.download_voices en_US-amy-medium
+export PIPER=$PWD/.ttsenv/bin/piper PIPER_MODEL=$PWD/en_US-amy-medium.onnx
+
+# 句子文件：一行一句，可选中文用 | 分隔
+node tools/tts_lesson.mjs 课文.txt --out out/lesson1 --rate 1.05
+
+# 直接写进某一页：上传课文音频 + 按顺序回填每个热区的起止毫秒
+node tools/tts_lesson.mjs 课文.txt --out out/lesson1 --page 3
+```
+
+产出单声道 48kbps mp3（约 0.36MB/分钟）和一份时间轴 JSON。
+机器音用于验证流程和做演示足够了；正式上线建议换成老师本人的录音——
+换了之后 `--page` 那一步照跑，时间轴会重新对齐。
+
+演示教材的配音就是这么生成的，成品存在 `server/assets/demo_lesson1.mp3`，
+`npm run reset` 时会优先使用它。
+
 > **只导入自编讲义或已获授权的素材。** 出版社对教材内容与配套音频享有著作权，把扫描件放进对外分发的小程序
 > 有侵权风险（被投诉下架、账号封禁、索赔）。教材 PDF 建议只作为提取课文文本的内部参考。
 > 仓库里的演示教材是脚本现画的自编内容，不含任何出版社素材。
@@ -161,6 +187,7 @@ mvp/
 ├── start.sh              一键启动
 ├── server/
 │   ├── package.json      零依赖
+│   ├── assets/           演示教材的课文语音（TTS 生成）+ 时间轴
 │   ├── test/e2e.mjs      端到端回归测试（npm test）
 │   └── src/
 │       ├── index.js      HTTP 服务 + 静态文件（支持 Range，音频 seek 靠它）
@@ -178,7 +205,7 @@ mvp/
 │   └── styles.css
 ├── miniprogram/          微信小程序原生代码
 ├── static-demo/          纯静态体验版（可部署到 Cloudflare Worker，无后端、0 成本）
-├── tools/                PDF 导入、批量上传、音频规范化
+├── tools/                PDF 导入与自动标注、批量上传、音频规范化、TTS 配音
 ├── content/              页面图 / 音频 / 学生录音（静态托管在 /files/）
 └── data/app.db           SQLite 数据库
 ```
@@ -205,7 +232,8 @@ api.js       业务接口：参数校验、权限、组装响应        ← 迁�
 npm test --prefix server     # 需要服务已启动
 ```
 
-23 项断言，覆盖登录鉴权、内容后台全链路、作业提交批改、打卡、权限、级联删除，
+24 项断言，覆盖登录鉴权、内容后台全链路、作业提交批改、打卡、权限、级联删除，
+以及「重存标注不能换掉热区 id」——热区 id 被作业和学生录音引用，换了就全对不上。
 跑完自己把测试数据删干净。**换掉 repo.js 之后全绿，就说明业务行为没变。**
 
 ---

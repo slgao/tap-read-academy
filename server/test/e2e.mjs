@@ -77,6 +77,17 @@ const TAG = '__e2e_' + Date.now();
   const cat = await call('GET', `/api/books/${book.id}/catalog`, null, T.token);
   check('目录统计', cat.lessons[0].pages[0].hotspotCount === 2);
 
+  // 重存标注不能换掉热区 id —— 作业和学生录音都按 id 引用它们
+  const idsBefore = detail.hotspots.map((h) => h.id);
+  await call('PUT', `/api/admin/pages/${page.id}/hotspots`, {
+    hotspots: detail.hotspots.map((h) => ({ ...h, cn: h.cn + '(改过)' })),
+  }, T.token);
+  const resaved = await call('GET', `/api/pages/${page.id}`, null, T.token);
+  check('重存标注保留热区 id',
+    JSON.stringify(resaved.hotspots.map((h) => h.id)) === JSON.stringify(idsBefore)
+    && resaved.hotspots[0].cn.endsWith('(改过)'),
+    'id ' + idsBefore.join(',') + ' 不变');
+
   log('\n[4] 作业：布置 → 提交 → 批改');
   const hw = await call('POST', '/api/homeworks', {
     classId: cls.id, pageId: page.id, title: TAG + ' 作业',

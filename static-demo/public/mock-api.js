@@ -16,7 +16,7 @@
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
         "startMs": 300,
-        "endMs": 2820,
+        "endMs": 2947,
         "en": "Hello! My name is Li Ming.",
         "cn": "你好！我叫李明。"
       },
@@ -26,8 +26,8 @@
         "y": 0.29842931937172773,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 3320,
-        "endMs": 5000,
+        "startMs": 3497,
+        "endMs": 4925,
         "en": "What is your name?",
         "cn": "你叫什么名字？"
       },
@@ -37,8 +37,8 @@
         "y": 0.39659685863874344,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 5500,
-        "endMs": 8860,
+        "startMs": 5475,
+        "endMs": 8412,
         "en": "My name is Anna. Nice to meet you.",
         "cn": "我叫安娜。很高兴认识你。"
       },
@@ -48,8 +48,8 @@
         "y": 0.49476439790575916,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 9360,
-        "endMs": 11040,
+        "startMs": 8962,
+        "endMs": 10227,
         "en": "How old are you?",
         "cn": "你几岁了？"
       },
@@ -59,8 +59,8 @@
         "y": 0.5929319371727748,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 11540,
-        "endMs": 13640,
+        "startMs": 10777,
+        "endMs": 12379,
         "en": "I am ten years old.",
         "cn": "我十岁了。"
       },
@@ -70,8 +70,8 @@
         "y": 0.6910994764397905,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 14140,
-        "endMs": 15820,
+        "startMs": 12929,
+        "endMs": 14183,
         "en": "Where are you from?",
         "cn": "你来自哪里？"
       }
@@ -86,8 +86,8 @@
         "y": 0.20026178010471204,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 16320,
-        "endMs": 19680,
+        "startMs": 14733,
+        "endMs": 17717,
         "en": "This is my father. He is a doctor.",
         "cn": "这是我的爸爸，他是一名医生。"
       },
@@ -97,8 +97,8 @@
         "y": 0.29842931937172773,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 20180,
-        "endMs": 23540,
+        "startMs": 18267,
+        "endMs": 21355,
         "en": "This is my mother. She is a teacher.",
         "cn": "这是我的妈妈，她是一名老师。"
       },
@@ -108,8 +108,8 @@
         "y": 0.39659685863874344,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 24040,
-        "endMs": 26140,
+        "startMs": 21905,
+        "endMs": 23705,
         "en": "I have a little sister.",
         "cn": "我有一个妹妹。"
       },
@@ -119,8 +119,8 @@
         "y": 0.49476439790575916,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 26640,
-        "endMs": 29580,
+        "startMs": 24255,
+        "endMs": 26716,
         "en": "There are four people in my family.",
         "cn": "我家有四口人。"
       },
@@ -130,8 +130,8 @@
         "y": 0.5929319371727748,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 30080,
-        "endMs": 32180,
+        "startMs": 27266,
+        "endMs": 29066,
         "en": "Do you have any brothers?",
         "cn": "你有兄弟吗？"
       },
@@ -141,8 +141,8 @@
         "y": 0.6910994764397905,
         "w": 0.8814814814814815,
         "h": 0.06806282722513089,
-        "startMs": 32680,
-        "endMs": 35200,
+        "startMs": 29616,
+        "endMs": 31950,
         "en": "I love my family very much.",
         "cn": "我非常爱我的家人。"
       }
@@ -166,7 +166,7 @@
     return s;
   }
 
-  const AUDIO = { url: 'assets/lesson1.mp3', durationMs: 35784, placeholder: true };
+  const AUDIO = { url: 'assets/lesson1.mp3', durationMs: 32450, placeholder: false };
   const PAGES = CONTENT.map((p, i) => ({
     id: i + 1, pageNo: p.pageNo, img: { url: 'assets/p' + (i + 1) + '.webp' },
     imgW: 1080, imgH: 1528,
@@ -303,6 +303,13 @@
 
   function install() {
     g.App.API = { get: wrap('GET'), post: wrap('POST'), put: wrap('PUT'), del: wrap('DELETE') };
+
+    // 体验版自带真人语音，默认直接放音频文件 —— 比依赖设备的语音合成可靠得多
+    // （安卓微信内置浏览器常常没有英文语音包）
+    const BasePlayer = g.App.Player;
+    function DemoPlayer() { const p = new BasePlayer(); p.mode = 'audio'; return p; }
+    DemoPlayer.prototype = BasePlayer.prototype;
+    g.App.Player = DemoPlayer;
 
     // 若设备没有英文语音合成，自动回退到内置音轨，避免点了没声音
     const p = g.App.Player.prototype;

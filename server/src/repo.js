@@ -178,17 +178,39 @@ const hotspots = {
   async byId(id) { return toHotspot(q('SELECT * FROM hotspots WHERE id=?').get(num(id))); },
   async byPage(pageId) { return q('SELECT * FROM hotspots WHERE page_id=? ORDER BY sort, id').all(num(pageId)).map(toHotspot); },
   async countByPage(pageId) { return count('SELECT COUNT(*) n FROM hotspots WHERE page_id=?', num(pageId)); },
-  /** 整页替换（标注后台保存时用）—— 语义上是一次原子的"这一页的热区就是这些" */
+  /**
+   * 整页保存热区（标注后台用）。
+   *
+   * 按位置**就地更新**已有的行，而不是删掉重插 —— 因为热区 id 会被作业（homeworks.hotspot_ids）
+   * 和学生录音（submission_items.hotspot_id）引用。删掉重插会让老师每改一次标注，
+   * 之前布置的作业和学生交的录音就全部对不上了。
+   *
+   * 多出来的行才删除；若该行已有学生录音，拒绝删除并说明原因。
+   */
   async replaceForPage(pageId, list, defaultAudioId) {
-    q('DELETE FROM hotspots WHERE page_id=?').run(num(pageId));
+    const existing = q('SELECT id FROM hotspots WHERE page_id=? ORDER BY sort, id').all(num(pageId));
+    const upd = q(`UPDATE hotspots SET audio_id=?, x=?, y=?, w=?, h=?, start_ms=?, end_ms=?,
+                   text_en=?, text_cn=?, type=?, sort=? WHERE id=?`);
     const ins = q(`INSERT INTO hotspots (page_id, audio_id, x, y, w, h, start_ms, end_ms, text_en, text_cn, type, sort)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
-    let i = 0;
-    for (const h of list) {
-      ins.run(num(pageId), h.audioId || defaultAudioId || null,
+
+    list.forEach((h, i) => {
+      const args = [h.audioId || defaultAudioId || null,
         Number(h.x) || 0, Number(h.y) || 0, Number(h.w) || 0, Number(h.h) || 0,
         Math.round(Number(h.startMs) || 0), Math.round(Number(h.endMs) || 0),
-        String(h.en || ''), String(h.cn || ''), h.type || 'sentence', ++i);
+        String(h.en || ''), String(h.cn || ''), h.type || 'sentence', i + 1];
+      if (existing[i]) upd.run(...args, existing[i].id);
+      else ins.run(num(pageId), ...args);
+    });
+
+    for (const row of existing.slice(list.length)) {
+      const used = count('SELECT COUNT(*) n FROM submission_items WHERE hotspot_id=?', row.id);
+      if (used) {
+        const e = new Error('有学生已经对这一页的句子交过录音，不能减少热区数量；请先删掉相关作业');
+        e.code = 3009;
+        throw e;
+      }
+      q('DELETE FROM hotspots WHERE id=?').run(row.id);
     }
     return list.length;
   },

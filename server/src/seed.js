@@ -125,12 +125,26 @@ async function seed() {
 
     const allLines = PAGES.flatMap((p) => p.lines);
     const mp3Rel = 'audio/demo_lesson1.mp3';
-    console.log('  生成课文音频 (ffmpeg) ...');
-    const { timings } = buildLessonAudio(allLines, path.join(CONTENT_DIR, mp3Rel));
+
+    // 优先用仓库里预先合成好的真人语音（tools/tts_lesson.mjs 生成）；
+    // 没有的话退回 ffmpeg 合成的提示音，保证 seed 在任何机器上都能跑完。
+    const canned = path.join(__dirname, '../assets/demo_lesson1.mp3');
+    const cannedJson = path.join(__dirname, '../assets/demo_lesson1.json');
+    let timings, placeholder;
+    if (fs.existsSync(canned) && fs.existsSync(cannedJson)) {
+      console.log('  使用预置课文语音 server/assets/demo_lesson1.mp3 ...');
+      fs.copyFileSync(canned, path.join(CONTENT_DIR, mp3Rel));
+      timings = JSON.parse(fs.readFileSync(cannedJson, 'utf8'));
+      placeholder = false;
+    } else {
+      console.log('  未找到预置语音，用 ffmpeg 合成占位音轨 ...');
+      ({ timings } = buildLessonAudio(allLines, path.join(CONTENT_DIR, mp3Rel)));
+      placeholder = true;
+    }
     const audio = await repo.assets.create({
       kind: 'audio', relPath: mp3Rel, mime: 'audio/mpeg',
       durationMs: Math.round(timings[timings.length - 1].endMs + 500),
-      sizeBytes: fs.statSync(path.join(CONTENT_DIR, mp3Rel)).size, placeholder: true,
+      sizeBytes: fs.statSync(path.join(CONTENT_DIR, mp3Rel)).size, placeholder,
     });
     await repo.lessons.setAudio(lesson.id, audio.id);
 

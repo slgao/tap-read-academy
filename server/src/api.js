@@ -452,6 +452,8 @@ async function handleApi(req, res, pathname) {
   try {
     await route.handler({ req, res, user, params, body });
   } catch (e) {
+    // repo 抛出的业务异常带 code，按业务错误返回；其余才算服务端错误
+    if (Number.isInteger(e.code) && e.code >= 1000 && e.code < 6000) return fail(res, e.code, e.message);
     console.error('[api error]', pathname, e);
     fail(res, 500, '服务端错误: ' + e.message);
   }

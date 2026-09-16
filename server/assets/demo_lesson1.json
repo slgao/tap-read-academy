@@ -1,0 +1,86 @@
+[
+  {
+    "index": 1,
+    "en": "Hello! My name is Li Ming.",
+    "cn": "你好！我叫李明。",
+    "startMs": 300,
+    "endMs": 2947
+  },
+  {
+    "index": 2,
+    "en": "What is your name?",
+    "cn": "你叫什么名字？",
+    "startMs": 3497,
+    "endMs": 4925
+  },
+  {
+    "index": 3,
+    "en": "My name is Anna. Nice to meet you.",
+    "cn": "我叫安娜。很高兴认识你。",
+    "startMs": 5475,
+    "endMs": 8412
+  },
+  {
+    "index": 4,
+    "en": "How old are you?",
+    "cn": "你几岁了？",
+    "startMs": 8962,
+    "endMs": 10227
+  },
+  {
+    "index": 5,
+    "en": "I am ten years old.",
+    "cn": "我十岁了。",
+    "startMs": 10777,
+    "endMs": 12379
+  },
+  {
+    "index": 6,
+    "en": "Where are you from?",
+    "cn": "你来自哪里？",
+    "startMs": 12929,
+    "endMs": 14183
+  },
+  {
+    "index": 7,
+    "en": "This is my father. He is a doctor.",
+    "cn": "这是我的爸爸，他是一名医生。",
+    "startMs": 14733,
+    "endMs": 17717
+  },
+  {
+    "index": 8,
+    "en": "This is my mother. She is a teacher.",
+    "cn": "这是我的妈妈，她是一名老师。",
+    "startMs": 18267,
+    "endMs": 21355
+  },
+  {
+    "index": 9,
+    "en": "I have a little sister.",
+    "cn": "我有一个妹妹。",
+    "startMs": 21905,
+    "endMs": 23705
+  },
+  {
+    "index": 10,
+    "en": "There are four people in my family.",
+    "cn": "我家有四口人。",
+    "startMs": 24255,
+    "endMs": 26716
+  },
+  {
+    "index": 11,
+    "en": "Do you have any brothers?",
+    "cn": "你有兄弟吗？",
+    "startMs": 27266,
+    "endMs": 29066
+  },
+  {
+    "index": 12,
+    "en": "I love my family very much.",
+    "cn": "我非常爱我的家人。",
+    "startMs": 29616,
+    "endMs": 31950
+  }
+]
