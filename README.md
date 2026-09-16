@@ -172,8 +172,9 @@ utils/audio.js ★ 播放器封装（一课一音频 + start/end 毫秒切片）
 `static-demo/` 是一份**纯静态**的体验版：没有后端，内容内联，学习记录存在访问者自己手机的 localStorage 里。
 
 ```bash
+node tools/export_static_demo.mjs   # 从本地服务导出教材内容（仓库里不含这部分）
 cd static-demo
-npx wrangler deploy        # 部署到 Cloudflare Workers，免费额度足够
+npx wrangler deploy                 # 部署到 Cloudflare Workers，免费额度足够
 ```
 
 本地先看看：`cd static-demo/public && python3 -m http.server 8080`
@@ -207,7 +208,7 @@ mvp/
 │   ├── common.js                接口/播放器/录音封装
 │   └── styles.css
 ├── miniprogram/          微信小程序原生代码
-├── static-demo/          纯静态体验版（可部署到 Cloudflare Worker，无后端、0 成本）
+├── static-demo/          纯静态体验版（可部署到 Cloudflare Worker，无后端、0 成本；内容需导出）
 ├── tools/                PDF 导入与自动标注、批量上传、音频规范化、TTS 配音、演示录屏
 ├── content/              页面图 / 音频 / 学生录音（静态托管在 /files/）
 └── data/app.db           SQLite 数据库

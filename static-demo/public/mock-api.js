@@ -1,154 +1,10 @@
-/* 静态演示版的数据层：没有后端，全部跑在浏览器里
- * - 内容（页面图 / 音频 / 热区）内联在下面
- * - 学习记录、录音、作业提交存在 localStorage
+/* 静态体验版的数据层：没有后端，全部跑在浏览器里
+ * - 教材内容（页面图 / 音频 / 热区）在同目录的 content.json，由 tools/export_static_demo.mjs 生成
+ * - 学习记录、录音、作业提交存在访问者自己的 localStorage
  * 覆盖 App.API 后，student.js 一行都不用改 —— 这也说明数据层是可替换的
  */
 (function (g) {
   'use strict';
-  const CONTENT = [
-  {
-    "pageNo": 1,
-    "hotspots": [
-      {
-        "id": 101,
-        "x": 0.05925925925925926,
-        "y": 0.20026178010471204,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 300,
-        "endMs": 2947,
-        "en": "Hello! My name is Li Ming.",
-        "cn": "你好！我叫李明。"
-      },
-      {
-        "id": 102,
-        "x": 0.05925925925925926,
-        "y": 0.29842931937172773,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 3497,
-        "endMs": 4925,
-        "en": "What is your name?",
-        "cn": "你叫什么名字？"
-      },
-      {
-        "id": 103,
-        "x": 0.05925925925925926,
-        "y": 0.39659685863874344,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 5475,
-        "endMs": 8412,
-        "en": "My name is Anna. Nice to meet you.",
-        "cn": "我叫安娜。很高兴认识你。"
-      },
-      {
-        "id": 104,
-        "x": 0.05925925925925926,
-        "y": 0.49476439790575916,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 8962,
-        "endMs": 10227,
-        "en": "How old are you?",
-        "cn": "你几岁了？"
-      },
-      {
-        "id": 105,
-        "x": 0.05925925925925926,
-        "y": 0.5929319371727748,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 10777,
-        "endMs": 12379,
-        "en": "I am ten years old.",
-        "cn": "我十岁了。"
-      },
-      {
-        "id": 106,
-        "x": 0.05925925925925926,
-        "y": 0.6910994764397905,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 12929,
-        "endMs": 14183,
-        "en": "Where are you from?",
-        "cn": "你来自哪里？"
-      }
-    ]
-  },
-  {
-    "pageNo": 2,
-    "hotspots": [
-      {
-        "id": 201,
-        "x": 0.05925925925925926,
-        "y": 0.20026178010471204,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 14733,
-        "endMs": 17717,
-        "en": "This is my father. He is a doctor.",
-        "cn": "这是我的爸爸，他是一名医生。"
-      },
-      {
-        "id": 202,
-        "x": 0.05925925925925926,
-        "y": 0.29842931937172773,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 18267,
-        "endMs": 21355,
-        "en": "This is my mother. She is a teacher.",
-        "cn": "这是我的妈妈，她是一名老师。"
-      },
-      {
-        "id": 203,
-        "x": 0.05925925925925926,
-        "y": 0.39659685863874344,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 21905,
-        "endMs": 23705,
-        "en": "I have a little sister.",
-        "cn": "我有一个妹妹。"
-      },
-      {
-        "id": 204,
-        "x": 0.05925925925925926,
-        "y": 0.49476439790575916,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 24255,
-        "endMs": 26716,
-        "en": "There are four people in my family.",
-        "cn": "我家有四口人。"
-      },
-      {
-        "id": 205,
-        "x": 0.05925925925925926,
-        "y": 0.5929319371727748,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 27266,
-        "endMs": 29066,
-        "en": "Do you have any brothers?",
-        "cn": "你有兄弟吗？"
-      },
-      {
-        "id": 206,
-        "x": 0.05925925925925926,
-        "y": 0.6910994764397905,
-        "w": 0.8814814814814815,
-        "h": 0.06806282722513089,
-        "startMs": 29616,
-        "endMs": 31950,
-        "en": "I love my family very much.",
-        "cn": "我非常爱我的家人。"
-      }
-    ]
-  }
-];
 
   const LS = 'dianbu_demo_state';
   const load = () => { try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch { return {}; } };
@@ -162,62 +18,92 @@
     s.streak = s.streak || 0;
     s.lastCheckin = s.lastCheckin || null;
     s.days = s.days || {};
-    s.subs = s.subs || {};        // hwId -> { status, stars, reviewText, items:{hotspotId:dataUrl} }
+    s.subs = s.subs || {};
     return s;
   }
 
-  const AUDIO = { url: 'assets/lesson1.mp3', durationMs: 32450, placeholder: false };
-  const PAGES = CONTENT.map((p, i) => ({
-    id: i + 1, pageNo: p.pageNo, img: { url: 'assets/p' + (i + 1) + '.webp' },
-    imgW: 1080, imgH: 1528,
-    hotspots: p.hotspots.map((h) => Object.assign({}, h, { audio: AUDIO, type: 'sentence' })),
-  }));
-  const ALL_HS = PAGES.flatMap((p) => p.hotspots);
-  const HW = [{
-    id: 1, title: 'Lesson 1 前四句 跟读', className: '六年级 A 班', classId: 1,
-    pageId: 1, itemCount: 4, note: '注意 name 的发音，录之前先听两遍原音。',
-    deadline: '', createdAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
-    hotspotIds: PAGES[0].hotspots.slice(0, 4).map((h) => h.id),
-  }];
+  /* ---------- 内容索引 ---------- */
+  let C = null;                 // content.json
+  const idx = { pages: {}, hotspots: {}, lessonOf: {}, siblings: {} };
 
-  function hwBrief(hw, s) {
+  function buildIndex() {
+    for (const b of C.books) {
+      for (const l of b.lessons) {
+        const ids = l.pages.map((p) => p.id);
+        for (const p of l.pages) {
+          idx.pages[p.id] = { page: p, lesson: l, book: b };
+          idx.siblings[p.id] = ids;
+          for (const h of p.hotspots) idx.hotspots[h.id] = { h, lesson: l };
+        }
+      }
+    }
+  }
+  const audioOf = (lesson) =>
+    lesson.audio ? { id: lesson.id, url: lesson.audio.url, durationMs: lesson.audio.durationMs, placeholder: false } : null;
+
+  const ready = fetch('content.json', { cache: 'no-cache' })
+    .then((r) => r.json())
+    .then((j) => { C = j; buildIndex(); })
+    .catch((e) => { console.error('内容加载失败', e); throw new Error('内容加载失败，请刷新重试'); });
+
+  /* ---------- 作业 ---------- */
+  function hwBrief(s) {
+    const hw = C.homework;
     const sub = s.subs[hw.id];
-    return Object.assign({}, hw, {
+    return {
+      id: hw.id, title: hw.title, className: hw.className, classId: hw.classId,
+      pageId: hw.pageId, itemCount: hw.hotspotIds.length, note: hw.note, deadline: '',
+      createdAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
       status: sub ? sub.status : 'todo',
       stars: sub ? sub.stars : null,
       reviewText: sub ? sub.reviewText : null,
-    });
+      submissionId: sub ? 1 : null,
+    };
   }
 
-  const ROUTES = [
+  /* ---------- 路由 ---------- */
+  const R = [
     ['POST', /^\/api\/auth\/dev-login$/, (m, body) => {
       const s = state(); s.name = (body.name || '同学').trim(); save(s);
       return { token: 'demo', user: { id: 1, role: 'student', name: s.name, stars: s.stars, streak: s.streak } };
     }],
     ['GET', /^\/api\/me$/, () => {
       const s = state();
-      return { user: { id: 1, role: 'student', name: s.name, stars: s.stars, streak: s.streak },
-               classes: [{ id: 1, name: '六年级 A 班', inviteCode: 'DEMO88' }] };
-    }],
-    ['GET', /^\/api\/books$/, () => [{
-      id: 1, title: '自编讲义 · 英语入门 Demo', subtitle: '机构自编内容，无版权风险',
-      grade: '三年级起点', cover: null, lessonCount: 1, pageCount: PAGES.length,
-    }]],
-    ['GET', /^\/api\/books\/(\d+)\/catalog$/, () => ({
-      book: { id: 1, title: '自编讲义 · 英语入门 Demo', subtitle: '机构自编内容' },
-      lessons: [{ id: 1, title: 'Lesson 1  Greetings & Family', sort: 1,
-        pages: PAGES.map((p) => ({ id: p.id, pageNo: p.pageNo, hotspotCount: p.hotspots.length })) }],
-    })],
-    ['GET', /^\/api\/pages\/(\d+)$/, (m) => {
-      const i = PAGES.findIndex((p) => p.id === Number(m[1]));
-      const p = PAGES[i];
       return {
-        page: { id: p.id, pageNo: p.pageNo, imgW: p.imgW, imgH: p.imgH, img: p.img },
-        lesson: { id: 1, title: 'Lesson 1  Greetings & Family', audio: AUDIO },
-        book: { id: 1, title: '自编讲义 · 英语入门 Demo' },
-        prevPageId: i > 0 ? PAGES[i - 1].id : null,
-        nextPageId: i < PAGES.length - 1 ? PAGES[i + 1].id : null,
-        hotspots: p.hotspots,
+        user: { id: 1, role: 'student', name: s.name, stars: s.stars, streak: s.streak },
+        classes: [{ id: 1, name: C.homework.className, inviteCode: 'DEMO88' }],
+      };
+    }],
+    ['GET', /^\/api\/books$/, () => C.books.map((b) => ({
+      id: b.id, title: b.title, subtitle: b.subtitle, grade: b.grade, cover: null,
+      lessonCount: b.lessons.length,
+      pageCount: b.lessons.reduce((n, l) => n + l.pages.length, 0),
+    }))],
+    ['GET', /^\/api\/books\/(\d+)\/catalog$/, (m) => {
+      const b = C.books.find((x) => x.id === Number(m[1]));
+      if (!b) throw new Error('教材不存在');
+      return {
+        book: { id: b.id, title: b.title, subtitle: b.subtitle, grade: b.grade },
+        lessons: b.lessons.map((l, i) => ({
+          id: l.id, title: l.title, sort: i + 1,
+          pages: l.pages.map((p) => ({ id: p.id, pageNo: p.pageNo, hotspotCount: p.hotspots.length })),
+        })),
+      };
+    }],
+    ['GET', /^\/api\/pages\/(\d+)$/, (m) => {
+      const e = idx.pages[Number(m[1])];
+      if (!e) throw new Error('页面不存在');
+      const sib = idx.siblings[e.page.id];
+      const i = sib.indexOf(e.page.id);
+      const audio = audioOf(e.lesson);
+      return {
+        page: { id: e.page.id, pageNo: e.page.pageNo, imgW: e.page.imgW, imgH: e.page.imgH,
+                img: { url: e.page.img } },
+        lesson: { id: e.lesson.id, title: e.lesson.title, audio },
+        book: { id: e.book.id, title: e.book.title },
+        prevPageId: i > 0 ? sib[i - 1] : null,
+        nextPageId: i < sib.length - 1 ? sib[i + 1] : null,
+        hotspots: e.page.hotspots.map((h) => Object.assign({}, h, { type: 'sentence', audio })),
       };
     }],
     ['POST', /^\/api\/study\/heartbeat$/, (m, body) => {
@@ -241,28 +127,32 @@
       return { streak: s.streak, stars: s.stars, checkedInToday: s.lastCheckin === today(),
                totalMinutes: Math.round(days.reduce((a, b) => a + b.seconds, 0) / 60), days, needSeconds: 60 };
     }],
-    ['GET', /^\/api\/homeworks$/, () => { const s = state(); return HW.map((h) => hwBrief(h, s)); }],
-    ['GET', /^\/api\/homeworks\/(\d+)$/, (m) => {
+    ['GET', /^\/api\/homeworks$/, () => [hwBrief(state())]],
+    ['GET', /^\/api\/homeworks\/(\d+)$/, () => {
       const s = state();
-      const hw = HW.find((h) => h.id === Number(m[1]));
+      const hw = C.homework;
+      const lesson = idx.pages[hw.pageId].lesson;
+      const audio = audioOf(lesson);
       const items = hw.hotspotIds.map((id) => {
-        const h = ALL_HS.find((x) => x.id === id);
-        return { hotspotId: h.id, en: h.en, cn: h.cn, startMs: h.startMs, endMs: h.endMs, audio: AUDIO };
+        const h = idx.hotspots[id].h;
+        return { hotspotId: h.id, en: h.en, cn: h.cn, startMs: h.startMs, endMs: h.endMs, audio };
       });
-      const out = Object.assign(hwBrief(hw, s), { items, lessonAudio: AUDIO });
+      const out = Object.assign(hwBrief(s), { items, lessonAudio: audio });
       const sub = s.subs[hw.id];
       if (sub) {
-        out.mySubmission = { id: 1, status: sub.status, stars: sub.stars, reviewText: sub.reviewText,
-          items: Object.keys(sub.items || {}).map((k) => ({ hotspotId: Number(k), audio: { url: sub.items[k] } })) };
+        out.mySubmission = {
+          id: 1, status: sub.status, stars: sub.stars, reviewText: sub.reviewText,
+          items: Object.keys(sub.items || {}).map((k) => ({ hotspotId: Number(k), audio: { url: sub.items[k] } })),
+        };
       }
       return out;
     }],
     ['POST', /^\/api\/homeworks\/(\d+)\/submit$/, (m, body) => {
       const s = state();
-      const id = Number(m[1]);
+      const id = C.homework.id;
       const items = {};
+      // 演示版把录音存成 dataURL；localStorage 容量有限，只留最近一次
       (body.items || []).forEach((it) => {
-        // 演示版把录音存成 dataURL（localStorage 容量有限，只留最近一次）
         if (it.audioBase64) items[it.hotspotId] = 'data:audio/' + (it.ext || 'webm') + ';base64,' + it.audioBase64;
       });
       s.subs[id] = { status: 'submitted', stars: null, reviewText: null, items };
@@ -284,54 +174,50 @@
     }],
   ];
 
-  function handle(method, path, body) {
-    for (const [m, re, fn] of ROUTES) {
+  function handle(method, p, body) {
+    for (const [m, re, fn] of R) {
       if (m !== method) continue;
-      const mt = re.exec(path);
+      const mt = re.exec(p);
       if (mt) return fn(mt, body || {});
     }
-    throw new Error('演示版未实现该接口：' + method + ' ' + path);
+    throw new Error('体验版未实现该接口：' + method + ' ' + p);
   }
 
-  function wrap(method) {
-    return (path, body) => new Promise((resolve, reject) => {
+  const wrap = (method) => (p, body) =>
+    ready.then(() => new Promise((res, rej) => {
       setTimeout(() => {
-        try { resolve(handle(method, path, body)); } catch (e) { reject(e); }
+        try { res(handle(method, p, body)); } catch (e) { rej(e); }
       }, 60);   // 模拟一点网络延迟，手感更真实
-    });
-  }
-
-  function install() {
-    g.App.API = { get: wrap('GET'), post: wrap('POST'), put: wrap('PUT'), del: wrap('DELETE') };
-
-    // 体验版自带真人语音，默认直接放音频文件 —— 比依赖设备的语音合成可靠得多
-    // （安卓微信内置浏览器常常没有英文语音包）
-    const BasePlayer = g.App.Player;
-    function DemoPlayer() { const p = new BasePlayer(); p.mode = 'audio'; return p; }
-    DemoPlayer.prototype = BasePlayer.prototype;
-    g.App.Player = DemoPlayer;
-
-    // 若设备没有英文语音合成，自动回退到内置音轨，避免点了没声音
-    const p = g.App.Player.prototype;
-    const origPlay = p.play;
-    p.play = function (hs, onEnd) {
-      if (this.mode === 'tts' && !hasEnVoice()) this.mode = 'audio';
-      return origPlay.call(this, hs, onEnd);
-    };
-  }
+    }));
 
   let voiceChecked = null;
   function hasEnVoice() {
     if (voiceChecked !== null) return voiceChecked;
     try {
       const vs = speechSynthesis.getVoices() || [];
-      if (!vs.length) return true;               // 还没加载出来，先按支持处理
+      if (!vs.length) return true;
       voiceChecked = vs.some((v) => /^en/i.test(v.lang));
-      if (!voiceChecked) {
-        setTimeout(() => g.App.toast('本机没有英文语音，已切换到内置音轨（正式版用真人录音）', 3200), 800);
-      }
+      if (!voiceChecked) setTimeout(() => g.App.toast('本机没有英文语音，已切换到课文录音', 3200), 800);
       return voiceChecked;
     } catch { voiceChecked = false; return false; }
+  }
+
+  function install() {
+    g.App.API = { get: wrap('GET'), post: wrap('POST'), put: wrap('PUT'), del: wrap('DELETE') };
+
+    // 体验版自带课文录音，默认直接放音频文件 —— 比依赖设备的语音合成可靠
+    // （安卓微信内置浏览器常常没有英文语音包）
+    const Base = g.App.Player;
+    function DemoPlayer() { const p = new Base(); p.mode = 'audio'; return p; }
+    DemoPlayer.prototype = Base.prototype;
+    g.App.Player = DemoPlayer;
+
+    const proto = Base.prototype;
+    const origPlay = proto.play;
+    proto.play = function (hs, onEnd) {
+      if (this.mode === 'tts' && !hasEnVoice()) this.mode = 'audio';
+      return origPlay.call(this, hs, onEnd);
+    };
   }
 
   if (g.App) install(); else window.addEventListener('DOMContentLoaded', install);

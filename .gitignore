@@ -4,3 +4,8 @@ content/audio/
 content/rec/
 tools/out/
 node_modules/
+
+# 体验版的教材内容由 tools/export_static_demo.mjs 从本地服务导出，不入库
+# （可能包含导入的出版社教材页面与课文文本）
+static-demo/public/content.json
+static-demo/public/assets/

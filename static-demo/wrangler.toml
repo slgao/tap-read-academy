@@ -6,6 +6,8 @@ compatibility_date = "2026-01-01"
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+# 资源文件先经过 Worker（实现 Range，iPhone 播音频需要 206）
+run_worker_first = ["/assets/*"]
 
 # 想挂到自己的域名，取消下面两行注释并改成你的域名
 # routes = [{ pattern = "demo.你的域名.com", custom_domain = true }]
