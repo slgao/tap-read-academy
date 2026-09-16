@@ -1,0 +1,12 @@
+[Unit]
+Description=每天北京时间 03:30 备份 Tap Read
+
+[Timer]
+# 服务器时区是 UTC；19:30 UTC = 北京时间 03:30
+OnCalendar=*-*-* 19:30:00 UTC
+RandomizedDelaySec=10min
+# 机器关机错过了，开机后补跑
+Persistent=true
+
+[Install]
+WantedBy=timers.target

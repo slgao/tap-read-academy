@@ -1,0 +1,23 @@
+[Unit]
+Description=Tap Read Academy (英语点读)
+After=network.target
+
+[Service]
+Type=simple
+User=tapread
+WorkingDirectory=/opt/tap-read
+EnvironmentFile=/etc/tap-read.env
+ExecStart=/opt/node/bin/node server/src/index.js
+Restart=on-failure
+RestartSec=3
+# 与其他服务（如 VPN）同机：限制内存；内存耗尽时优先杀本程序
+MemoryMax=300M
+OOMScoreAdjust=600
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/tap-read/data /opt/tap-read/content
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -9,3 +9,7 @@ node_modules/
 # （可能包含导入的出版社教材页面与课文文本）
 static-demo/public/content.json
 static-demo/public/assets/
+
+# 部署配置（含服务器地址）和本地备份不入库
+deploy/deploy.env
+deploy/backups/

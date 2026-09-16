@@ -1,0 +1,22 @@
+# Tap Read Academy 反向代理
+# 若 443 已被其他服务占用（例如 VPN），HTTPS 改走 {HTTPS_PORT}，80 只用于证书验证和跳转
+# 把 {DOMAIN} 换成域名；没有域名可用 <IP 用横线连接>.sslip.io
+{
+	http_port 80
+	https_port {HTTPS_PORT}
+}
+
+{DOMAIN}:{HTTPS_PORT} {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000
+	tls {
+		issuer acme {
+			# 443 不归 Caddy 时 TLS-ALPN 验证走不通，只用 HTTP 验证
+			disable_tlsalpn_challenge
+		}
+	}
+}
+
+http://{DOMAIN} {
+	redir https://{DOMAIN}:{HTTPS_PORT}{uri} permanent
+}

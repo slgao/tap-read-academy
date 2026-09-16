@@ -1,0 +1,12 @@
+[Unit]
+Description=Tap Read 每日备份
+After=tap-read.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tap-read-backup
+# 低优先级运行，不和 VPN 抢资源
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=100M
+OOMScoreAdjust=600

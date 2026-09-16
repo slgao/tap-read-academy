@@ -209,6 +209,7 @@ mvp/
 │   └── styles.css
 ├── miniprogram/          微信小程序原生代码
 ├── static-demo/          纯静态体验版（可部署到 Cloudflare Worker，无后端、0 成本；内容需导出）
+├── deploy/               一键部署、回滚、每日备份（服务器地址在不入库的 deploy.env）
 ├── tools/                PDF 导入与自动标注、批量上传、音频规范化、TTS 配音、演示录屏
 ├── content/              页面图 / 音频 / 学生录音（静态托管在 /files/）
 └── data/app.db           SQLite 数据库
@@ -244,6 +245,38 @@ Playwright 录屏是**没有声音**的，所以脚本会记录每次触发发�
 
 脚本还会在录制前重建一条干净的作业，并在学生提交后**用老师身份调接口真的批改一次**，
 所以"老师批改 → 学生看到评语"这段是真实链路，不是演出来的。分镜写在脚本里，改内容直接改那几行。
+
+---
+
+## 四之四、部署到自己的服务器
+
+`deploy/` 里是一键部署脚本和服务器端配置。脚本在本地运行，通过 SSH 操作服务器。
+
+```bash
+cp deploy/deploy.env.example deploy/deploy.env   # 填服务器地址，这个文件不入库
+deploy/deploy.sh              # 部署
+deploy/deploy.sh rollback     # 回滚到上一版
+deploy/deploy.sh backup       # 立即备份，并把备份拉回本地 deploy/backups/
+deploy/deploy.sh status       # 服务、备份、内存状态
+deploy/deploy.sh logs         # 程序日志
+```
+
+**部署流程**：本地语法检查 → 服务器上先备份 → 保留当前版本 → 同步 `server/` `web/` → 重启
+→ 本机和公网健康检查 → **不通过自动回滚** → 核对同机服务的进程号没变。
+只同步代码，不碰服务器上的数据库、上传的文件和 Caddy 配置。
+
+`WATCH_SERVICES` 用来列出同一台机器上的其他服务（比如 VPN），部署前后会核对它们的进程号，
+确认没有被连带重启。
+
+**每日备份**：`deploy.sh` 首次运行时会在服务器上装好 systemd 定时器，每天北京时间 03:30
+用 SQLite 在线备份导出数据库，连同 `content/`（学生录音、页面图、课文音频）打包到
+`/var/backups/tap-read/`，保留 14 天。直接拷数据库文件会漏掉 WAL 里还没写回的数据，所以用的是在线备份。
+
+> 服务器上的备份防不住整台机器出问题。隔一段时间跑一次 `deploy.sh backup`，把备份拉回本地。
+
+**首次安装**（服务器上还什么都没有时）参考 `deploy/server/`：
+`tap-read.service` 是程序的 systemd 配置，`Caddyfile.template` 是 HTTPS 反向代理配置。
+服务器上的 `/etc/tap-read.env` 要设 `HOST=127.0.0.1` 和 `TEACHER_CODE=<老师口令>`。
 
 ---
 
