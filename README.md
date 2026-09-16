@@ -205,10 +205,28 @@ mvp/
 │   └── styles.css
 ├── miniprogram/          微信小程序原生代码
 ├── static-demo/          纯静态体验版（可部署到 Cloudflare Worker，无后端、0 成本）
-├── tools/                PDF 导入与自动标注、批量上传、音频规范化、TTS 配音
+├── tools/                PDF 导入与自动标注、批量上传、音频规范化、TTS 配音、演示录屏
 ├── content/              页面图 / 音频 / 学生录音（静态托管在 /files/）
 └── data/app.db           SQLite 数据库
 ```
+
+---
+
+## 四之三、录一段演示视频
+
+发给别人看最省事的方式是一段竖屏小视频（微信里直接能播，也不怕对方打不开链接）：
+
+```bash
+cd static-demo/public && python3 -m http.server 8080 &   # 体验版先跑起来
+npm i playwright                                          # 一次性，用系统已装的 Chrome
+node tools/record_demo.mjs --out out/demo
+```
+
+产出 `out/demo.mp4`，约 55 秒、860x1864、H.264+AAC、2MB 左右。
+
+Playwright 录屏是**没有声音**的，所以脚本会记录每次触发发音的时刻，事后用 ffmpeg
+把课文音频按这些时刻混回去；开头闪一帧纯黑作同步标记，用 `blackdetect` 校准零点，
+避免录制起点漂移导致音画不同步。分镜就写在脚本里，改内容直接改那几行。
 
 ---
 
