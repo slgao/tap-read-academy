@@ -2,7 +2,7 @@
 (function (global) {
   'use strict';
 
-  const KEY = () => 'dianbu_' + (global.APP_KEY || 'app');
+  const KEY = () => 'tap_read_' + (global.APP_KEY || 'app');
 
   const Store = {
     get token() { try { return localStorage.getItem(KEY() + '_token') || ''; } catch { return ''; } },

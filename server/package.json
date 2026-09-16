@@ -1,5 +1,5 @@
 {
-  "name": "dianbu-mvp-server",
+  "name": "tap-read-server",
   "version": "0.1.0",
   "private": true,
   "description": "英语点读+作业打卡 MVP 服务端（零 npm 依赖，只用 Node 内置模块）",

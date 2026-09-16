@@ -41,7 +41,7 @@ npx wrangler login          # 首次
 npx wrangler deploy
 ```
 
-部署完会给一个 `https://dianbu-demo.<你的账号>.workers.dev` 地址，手机直接打开。
+部署完会给一个 `https://tap-read-demo.<你的账号>.workers.dev` 地址，手机直接打开。
 
 - 想换名字：改 `wrangler.toml` 里的 `name`
 - 想挂自己域名：取消 `wrangler.toml` 里 `routes` 那两行的注释

@@ -6,7 +6,7 @@
 (function (g) {
   'use strict';
 
-  const LS = 'dianbu_demo_state';
+  const LS = 'tap_read_demo_state';
   const load = () => { try { return JSON.parse(localStorage.getItem(LS)) || {}; } catch { return {}; } };
   const save = (s) => { try { localStorage.setItem(LS, JSON.stringify(s)); } catch {} };
   const today = () => new Date().toISOString().slice(0, 10);

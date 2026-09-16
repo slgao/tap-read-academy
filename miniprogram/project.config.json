@@ -2,7 +2,7 @@
   "description": "英语点读 + 作业打卡 MVP",
   "miniprogramRoot": "./",
   "appid": "touristappid",
-  "projectname": "dianbu-mvp",
+  "projectname": "tap-read",
   "setting": {
     "urlCheck": false,
     "es6": true,
