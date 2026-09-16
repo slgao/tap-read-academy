@@ -6,6 +6,8 @@ const { ROOT, CONTENT_DIR } = require('./db');
 const { handleApi } = require('./api');
 
 const PORT = Number(process.env.PORT) || 3000;
+// 公网部署时设 HOST=127.0.0.1，只让反向代理（Caddy）访问；本地开发不设，监听所有网卡
+const HOST = process.env.HOST || undefined;
 const WEB_DIR = path.join(ROOT, 'web');
 
 const MIME = {
@@ -66,7 +68,7 @@ const server = http.createServer(async (req, res) => {
   return serveStatic(req, res, WEB_DIR, p);
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   console.log(`
   ┌────────────────────────────────────────────────┐
   │  点读 MVP 服务已启动                             │

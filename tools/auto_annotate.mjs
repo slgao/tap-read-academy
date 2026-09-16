@@ -164,7 +164,7 @@ const call = async (method, p, body, token) => {
   return j.data;
 };
 
-const token = DRY ? null : (await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TEACHER })).token;
+const token = DRY ? null : (await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TEACHER, teacherCode: process.env.TEACHER_CODE || '' })).token;
 const keepRatio = 1 - cropPct / 100;
 let pageNo = 0, totalHs = 0;
 

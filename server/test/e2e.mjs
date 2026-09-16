@@ -36,7 +36,7 @@ const TAG = '__e2e_' + Date.now();
 
 (async () => {
   log('\n[1] 登录与身份');
-  const T = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: '王老师' });
+  const T = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: '王老师', teacherCode: process.env.TEACHER_CODE || '' });
   check('老师登录', T.user.role === 'teacher', T.user.name);
   const me = await call('GET', '/api/me', null, T.token);
   check('老师有班级', me.classes.length > 0, me.classes[0] && me.classes[0].name);
@@ -124,6 +124,10 @@ const TAG = '__e2e_' + Date.now();
   check('学情汇总', sum.days.length > 0 && sum.stars > 0, `${sum.stars} 星 / ${sum.totalMinutes} 分钟`);
 
   log('\n[6] 权限');
+  if (process.env.TEACHER_CODE) {
+    const bad = await expectFail('POST', '/api/auth/dev-login', { role: 'teacher', name: '王老师', teacherCode: 'wrong' });
+    check('口令错误不能登录老师', /口令/.test(bad || ''), bad);
+  }
   const forbid = await expectFail('POST', '/api/admin/books', { title: 'x' }, S.token);
   check('学生不能建教材', /无权限/.test(forbid || ''), forbid);
 

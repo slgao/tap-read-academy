@@ -92,7 +92,7 @@ async function tap(page, hotspotIdx, src, sentenceIdx) {
 
 (async () => {
   /* ---------- 录制前：造一条干净的作业（不依赖库里现有数据） ---------- */
-  const T = await api('POST', '/api/auth/dev-login', { role: 'teacher', name: '王老师' });
+  const T = await api('POST', '/api/auth/dev-login', { role: 'teacher', name: '王老师', teacherCode: process.env.TEACHER_CODE || '' });
   const cls = (await api('GET', '/api/classes', null, T.token))[0];
 
   // 取第一套教材第一课第一页的前 4 句 —— 它们对应第一套时间轴的第 0~3 条

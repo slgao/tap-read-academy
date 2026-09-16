@@ -23,7 +23,7 @@ const call = async (m, p, b, t) => {
   return j.data;
 };
 
-const { token } = await call('POST', '/api/auth/dev-login', { role: 'teacher', name });
+const { token } = await call('POST', '/api/auth/dev-login', { role: 'teacher', name, teacherCode: process.env.TEACHER_CODE || '' });
 const files = fs.readdirSync(dir).filter((f) => /\.(webp|png|jpe?g)$/i.test(f)).sort();
 if (!files.length) { console.error('目录里没有图片'); process.exit(1); }
 

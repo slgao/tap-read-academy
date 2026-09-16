@@ -34,6 +34,7 @@
     body: () => `<div class="hero"><h2>老师，欢迎</h2><div class="small" style="opacity:.9">布置作业 · 批改跟读 · 查看班级</div></div>
       <div class="card">
         <label class="field"><span>姓名</span><input id="i-name" value="王老师"></label>
+        <label class="field"><span>老师口令</span><input id="i-tcode" type="password" placeholder="本地开发可不填"></label>
         <button class="btn block" data-act="login">进入</button>
         <div class="muted small mt center">演示账号：王老师（已有「六年级 A 班」）</div>
       </div>`,
@@ -170,7 +171,7 @@
     async login() {
       const name = document.getElementById('i-name').value.trim();
       if (!name) return toast('请填写姓名');
-      try { const d = await API.post('/api/auth/dev-login', { role: 'teacher', name }); Store.token = d.token; Store.user = d.user; go('classes'); }
+      try { const d = await API.post('/api/auth/dev-login', { role: 'teacher', name, teacherCode: document.getElementById('i-tcode').value }); Store.token = d.token; Store.user = d.user; go('classes'); }
       catch (e) { toast(e.message); }
     },
     logout() { Store.clear(); go('login'); },

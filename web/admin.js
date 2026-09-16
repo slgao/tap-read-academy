@@ -215,7 +215,7 @@
     async login() {
       const name = (document.getElementById('i-name') || {}).value || '';
       if (!name.trim()) return toast('请填写姓名');
-      try { const d = await API.post('/api/auth/dev-login', { role: 'teacher', name: name.trim() }); Store.token = d.token; Store.user = d.user; boot(); }
+      try { const d = await API.post('/api/auth/dev-login', { role: 'teacher', name: name.trim(), teacherCode: (document.getElementById('i-tcode') || {}).value || '' }); Store.token = d.token; Store.user = d.user; boot(); }
       catch (e) { toast(e.message); }
     },
     logout() { Store.clear(); boot(); },
@@ -332,6 +332,7 @@
       $top.insertAdjacentHTML('afterend', `<div class="view" id="lg" style="max-width:420px;margin:40px auto">
         <div class="card"><div class="strong mb">登录内容后台</div>
         <label class="field"><span>姓名（老师/管理员）</span><input id="i-name" value="王老师"></label>
+        <label class="field"><span>老师口令</span><input id="i-tcode" type="password" placeholder="本地开发可不填"></label>
         <button class="btn block" data-act="login">进入</button></div></div>`);
       return;
     }

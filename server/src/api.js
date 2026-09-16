@@ -44,6 +44,11 @@ on('POST', '/api/auth/dev-login', async (ctx) => {
   const { role = 'student', name, inviteCode: code } = ctx.body;
   if (!name || !String(name).trim()) return fail(ctx.res, 1001, '请填写姓名');
   const r = ['student', 'teacher', 'admin'].includes(role) ? role : 'student';
+  // 设置了 TEACHER_CODE 时，老师和管理员登录必须带口令 —— 否则公网上任何人输入老师姓名就能进后台
+  const need = process.env.TEACHER_CODE;
+  if (need && r !== 'student' && String(ctx.body.teacherCode || '') !== need) {
+    return fail(ctx.res, 2001, '老师口令不正确');
+  }
   const nm = String(name).trim();
 
   let user = await repo.users.byNameRole(nm, r);

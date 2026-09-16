@@ -112,7 +112,7 @@ if (PAGE_ID || LESSON_ID) {
     if (j.code !== 0) throw new Error(p + ' -> ' + j.msg);
     return j.data;
   };
-  const { token } = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TEACHER });
+  const { token } = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TEACHER, teacherCode: process.env.TEACHER_CODE || '' });
 
   // 要写的页面列表：给了 --lesson 就取整课，否则就这一页
   let pageIds;

@@ -50,7 +50,7 @@ const grab = async (url, dest) => {
 };
 
 fs.mkdirSync(ASSETS, { recursive: true });
-const { token } = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TEACHER });
+const { token } = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TEACHER, teacherCode: process.env.TEACHER_CODE || '' });
 
 let books = await call('GET', '/api/books', null, token);
 if (ONLY.length) books = books.filter((b) => ONLY.some((k) => b.title.includes(k)));
