@@ -1,5 +1,8 @@
 # 体验版（静态，可放 Cloudflare Worker）
 
+> **当前没有部署。** 测试验证改用 Oracle 上的完整版，Cloudflare 上的 `tap-read-demo` Worker 和海报用的 KV 存储已删除。
+> 以后要重新上线，按下面步骤部署，并先按 `wrangler.toml` 里的注释新建 KV 存储。
+
 给朋友看的版本。**没有后端**：教材内容在 `public/content.json`，学习记录、录音、作业提交都存在访问者自己手机的 localStorage 里，不上传、不产生任何服务器成本。
 
 > **仓库里不含教材内容。** `public/content.json` 和 `public/assets/` 已加入 `.gitignore`——
