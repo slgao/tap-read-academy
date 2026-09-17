@@ -685,21 +685,31 @@
         if (qr.isDark(r, c)) ctx.fillRect(x0 + c * cell, y0 + r * cell, Math.ceil(cell), Math.ceil(cell));
       }
     }
-    return cv.toDataURL('image/png');
+    return cv.toDataURL('image/jpeg', 0.92);
   }
 
-  function showPoster(url) {
+  const isWeChat = () => /MicroMessenger/i.test(navigator.userAgent);
+
+  /** hosted=true 表示是服务器上的真实图片地址（微信里长按能保存、能识别二维码） */
+  function showPoster(url, hosted) {
     closePoster();
+    const t = document.getElementById('toast'); if (t) t.classList.remove('show');   // 收起"正在生成海报"提示
+    const wx = isWeChat();
     const m = document.createElement('div');
     m.className = 'poster-mask'; m.id = 'poster';
     m.innerHTML = `
       <div class="poster-sheet" role="dialog" aria-label="学习海报">
         <img src="${url}" alt="我的学习海报">
-        <div class="muted small center">长按图片保存，或直接发给朋友</div>
-        <div class="row" style="gap:10px">
-          <a class="btn ghost grow" href="${url}" download="福斯特学习海报.png">保存图片</a>
-          <button class="btn grow" data-act="closePoster">完成</button>
-        </div>
+        ${wx ? `<div class="save-tip">
+            <b>长按上面的图片</b>，选「保存图片」存到手机，<br>或选「发送给朋友」直接分享
+            ${hosted ? '' : '<div class="muted small mt">如果长按没有保存选项，请截屏保存</div>'}
+          </div>
+          <button class="btn block" data-act="closePoster">完成</button>`
+        : `<div class="muted small center">长按图片保存，或点下面的按钮</div>
+          <div class="row" style="gap:10px">
+            <a class="btn ghost grow" href="${url}" download="福斯特学习海报.jpg">保存图片</a>
+            <button class="btn grow" data-act="closePoster">完成</button>
+          </div>`}
       </div>`;
     m.addEventListener('click', (e) => { if (e.target === m) closePoster(); });
     document.getElementById('app').appendChild(m);
@@ -761,8 +771,16 @@
       const plain = !el.querySelector('*');
       const label = el.textContent;
       if (plain) el.textContent = '生成中…'; else toast('正在生成海报…', 1200);
-      try { showPoster(await drawPoster()); }
-      catch (e) { toast('海报生成失败：' + e.message); }
+      try {
+        const dataUrl = await drawPoster();
+        // 传到服务器换成真实图片地址；失败就先直接显示，不耽误看海报
+        let url = dataUrl, hosted = false;
+        try {
+          const r = await API.post('/api/posters', { imageBase64: dataUrl });
+          if (r && r.url) { url = r.url; hosted = true; }
+        } catch (e) {}
+        showPoster(url, hosted);
+      } catch (e) { toast('海报生成失败：' + e.message); }
       finally { if (plain) el.textContent = label; }
     },
     closeCelebrate() { const m = document.getElementById('celebrate'); if (m) m.remove(); },

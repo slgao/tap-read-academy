@@ -24,6 +24,13 @@ async function save(kind, base64, ext) {
   return { relPath, size: buf.length };
 }
 
+/** 按指定路径保存（覆盖同名文件），用于每人只保留一份的内容，比如学习海报 */
+async function saveAs(relPath, buf) {
+  fs.mkdirSync(path.dirname(path.join(CONTENT_DIR, relPath)), { recursive: true });
+  fs.writeFileSync(path.join(CONTENT_DIR, relPath), buf);
+  return { relPath, size: buf.length };
+}
+
 /** 对外可访问的地址（迁云后换成 COS 签名 URL） */
 function urlOf(relPath) {
   return relPath ? '/files/' + relPath : null;
@@ -47,4 +54,4 @@ async function imageSize(relPath) {
   } catch { return { w: 0, h: 0 }; }
 }
 
-module.exports = { save, urlOf, probeDurationMs, imageSize };
+module.exports = { save, saveAs, urlOf, probeDurationMs, imageSize };

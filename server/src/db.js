@@ -10,6 +10,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.join(CONTENT_DIR, 'pages'), { recursive: true });
 fs.mkdirSync(path.join(CONTENT_DIR, 'audio'), { recursive: true });
 fs.mkdirSync(path.join(CONTENT_DIR, 'rec'), { recursive: true });
+fs.mkdirSync(path.join(CONTENT_DIR, 'posters'), { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
 db.exec('PRAGMA journal_mode = WAL');

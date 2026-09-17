@@ -107,6 +107,16 @@
         hotspots: e.page.hotspots.map((h) => Object.assign({}, h, { type: 'sentence', audio })),
       };
     }],
+    ['POST', /^\/api\/posters$/, async (m, body) => {
+      // 体验版没有后端：海报交给 Worker 存进 KV，换成真实图片地址（微信里长按才能保存）
+      const b64 = String(body.imageBase64 || '').replace(/^data:[^;]+;base64,/, '');
+      const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const r = await fetch('_poster', { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: bytes });
+      const j = await r.json();
+      if (j.code !== 0) throw new Error(j.msg || '海报上传失败');
+      return j.data;
+    }],
     ['GET', /^\/api\/listening$/, () => C.books.map((b) => ({
       bookId: b.id, bookTitle: b.title,
       lessons: b.lessons.filter((l) => l.audio).map((l) => ({

@@ -7,7 +7,13 @@ directory = "./public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 # 资源文件先经过 Worker（实现 Range，iPhone 播音频需要 206）
-run_worker_first = ["/assets/*"]
+# /poster/* 与 /_poster：学习海报的上传与读取，也要先经过 Worker
+run_worker_first = ["/assets/*", "/poster/*", "/_poster"]
 
 # 想挂到自己的域名，取消下面两行注释并改成你的域名
 # routes = [{ pattern = "demo.你的域名.com", custom_domain = true }]
+
+# 学习海报临时存储（3 天后自动过期）
+[[kv_namespaces]]
+binding = "POSTERS"
+id = "d5b975e6fa1a4c37806595e7295a87cc"

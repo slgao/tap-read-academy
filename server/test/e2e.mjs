@@ -148,6 +148,14 @@ const TAG = '__e2e_' + Date.now();
   const sum = await call('GET', '/api/study/summary', null, S.token);
   check('学情汇总', sum.days.length > 0 && sum.stars > 0, `${sum.stars} 星 / ${sum.totalMinutes} 分钟`);
 
+  log('\n[5b] 学习海报');
+  const poster = await call('POST', '/api/posters', { imageBase64: PNG_1x1 }, S.token);
+  const pr = await fetch(BASE + poster.url);
+  check('海报上传后是可访问的图片地址', pr.status === 200 && /image\/png/.test(pr.headers.get('content-type') || ''),
+    `${poster.url.split('?')[0]} ${pr.status} ${pr.headers.get('content-type')}`);
+  const notImg = await expectFail('POST', '/api/posters', { imageBase64: Buffer.from('hello').toString('base64') }, S.token);
+  check('非图片内容被拒绝', /JPG 或 PNG/.test(notImg || ''), notImg);
+
   log('\n[6] 权限');
   if (process.env.TEACHER_CODE) {
     const bad = await expectFail('POST', '/api/auth/dev-login', { role: 'teacher', name: '王老师', teacherCode: 'wrong' });

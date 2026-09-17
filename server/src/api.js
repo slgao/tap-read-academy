@@ -201,6 +201,22 @@ on('GET', '/api/lessons/:id/transcript', async (ctx) => {
   });
 });
 
+/* 学习海报：浏览器里画好后传上来，换成真实图片地址。
+ * 微信内置浏览器不支持下载，对 base64 内嵌图片长按也常常无法保存；真实 https 图片可以长按保存、识别二维码。
+ * 每个学生只保留最新一张，覆盖保存，不会越存越多。 */
+on('POST', '/api/posters', async (ctx) => {
+  const raw = String(ctx.body.imageBase64 || '').replace(/^data:[^;]+;base64,/, '');
+  const buf = Buffer.from(raw, 'base64');
+  if (!buf.length) return fail(ctx.res, 1001, '海报图片为空');
+  if (buf.length > 3 * 1024 * 1024) return fail(ctx.res, 1001, '海报图片过大');
+  const isJpg = buf[0] === 0xFF && buf[1] === 0xD8;
+  const isPng = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
+  if (!isJpg && !isPng) return fail(ctx.res, 1001, '海报必须是 JPG 或 PNG 图片');
+  const relPath = `posters/u${ctx.user.id}.${isJpg ? 'jpg' : 'png'}`;
+  await store.saveAs(relPath, buf);
+  ok(ctx.res, { url: store.urlOf(relPath) + '?v=' + Date.now() });
+});
+
 /* 学习时长 / 打卡 */
 on('POST', '/api/study/heartbeat', async (ctx) => {
   const sec = Math.max(0, Math.min(120, Number(ctx.body.seconds) || 0));
