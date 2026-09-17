@@ -38,7 +38,11 @@ function readBody(req, limitBytes = 48 * 1024 * 1024) {
 }
 
 const rid = () => crypto.randomBytes(16).toString('hex');
-const today = () => new Date().toISOString().slice(0, 10);
+// 一天按北京时间算：机构和学生都在国内。用固定 +8 而不是服务器本地时区，
+// 服务器在日本，学生手机时区也可能不对，固定下来两边才对得上。
+const CN_OFFSET_MS = 8 * 3600 * 1000;
+const dayKey = (ms = Date.now()) => new Date(ms + CN_OFFSET_MS).toISOString().slice(0, 10);
+const today = () => dayKey();
 const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
 function inviteCode() {
@@ -48,4 +52,4 @@ function inviteCode() {
   return s;
 }
 
-module.exports = { json, ok, fail, readBody, rid, today, now, inviteCode };
+module.exports = { json, ok, fail, readBody, rid, today, dayKey, now, inviteCode };

@@ -23,6 +23,9 @@
   };
   const ic = (name, cls = 'i') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name] || ''}</svg>`;
 
+  /** 一天按北京时间算，和服务端保持一致（手机时区不对也不会错位） */
+  const dayKey = (ms = Date.now()) => new Date(ms + 8 * 3600 * 1000).toISOString().slice(0, 10);
+
   /** 等级：按星星数，给初中生也留出追求的目标 */
   const LEVELS = [[0, '新芽'], [50, '小书虫'], [150, '阅读之星'], [300, '学习达人'], [600, '学霸']];
   function levelOf(stars) {
@@ -184,7 +187,7 @@
       const [sum, hws] = await Promise.all([API.get('/api/study/summary'), API.get('/api/homeworks')]);
       const todo = hws.filter((h) => h.status === 'todo' || h.status === 'rejected');
       // 只算今天；sum.days[0] 是最近有记录的一天，不一定是今天
-      const todayRow = sum.days.find((d) => d.date === new Date().toISOString().slice(0, 10));
+      const todayRow = sum.days.find((d) => d.date === dayKey());
       const secs = todayRow ? todayRow.seconds : 0;
       const pct = Math.min(100, Math.round((secs / sum.needSeconds) * 100));
       const needMin = Math.max(1, Math.round(sum.needSeconds / 60));
@@ -707,7 +710,7 @@
       const map = {}; sum.days.forEach((d) => { map[d.date] = d; });
       const cells = [];
       for (let i = 27; i >= 0; i--) {
-        const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+        const d = dayKey(Date.now() - i * 86400000);
         cells.push(`<div class="${map[d] && map[d].seconds >= sum.needSeconds ? 'on' : ''}">${Number(d.slice(8))}</div>`);
       }
       return `
@@ -1019,10 +1022,10 @@
     const colW = (W - 160) / 7;
     for (let i = 27; i >= 0; i--) {
       const k = 27 - i;
-      const dt = new Date(Date.now() - i * 86400000);
-      const on = (map[dt.toISOString().slice(0, 10)] || 0) >= sum.needSeconds;
+      const key = dayKey(Date.now() - i * 86400000);
+      const on = (map[key] || 0) >= sum.needSeconds;
       drawStamp(ctx, 80 + colW * (k % 7) + colW / 2, 890 + Math.floor(k / 7) * 96, 36, on,
-        on ? '读' : String(dt.getDate()), 5);
+        on ? '读' : String(Number(key.slice(8))), 5);
     }
 
     // 底部：二维码
@@ -1092,10 +1095,10 @@
     const W = '日一二三四五六';
     const cells = [];
     for (let i = 6; i >= 0; i--) {
-      const dt = new Date(Date.now() - i * 86400000);
-      const key = dt.toISOString().slice(0, 10);
+      const key = dayKey(Date.now() - i * 86400000);
       const on = (map[key] || 0) >= sum.needSeconds;
-      cells.push(`<div class="seal-cell"><div class="seal ${on ? 'on' : ''} ${i === 0 ? 'today' : ''}">${on ? '读' : ''}</div>${i === 0 ? '今天' : W[dt.getDay()]}</div>`);
+      const weekday = W[new Date(key + 'T12:00:00Z').getUTCDay()];
+      cells.push(`<div class="seal-cell"><div class="seal ${on ? 'on' : ''} ${i === 0 ? 'today' : ''}">${on ? '读' : ''}</div>${i === 0 ? '今天' : weekday}</div>`);
     }
     return `<div class="seal-row mt" aria-label="近 7 天打卡">${cells.join('')}</div>`;
   }

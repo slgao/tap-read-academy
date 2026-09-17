@@ -5,7 +5,7 @@
  */
 const repo = require('./repo');
 const store = require('./storage');
-const { ok, fail, readBody, rid, today, inviteCode } = require('./util');
+const { ok, fail, readBody, rid, today, dayKey, inviteCode } = require('./util');
 const grading = require('./grading');
 
 const CHECKIN_SECONDS = 60;   // 当日有效点读满 60 秒即算打卡（PRD 正式值为 5 分钟，demo 调小便于体验）
@@ -324,7 +324,7 @@ on('POST', '/api/study/heartbeat', async (ctx) => {
 
   let justChecked = false;
   if (row.seconds >= CHECKIN_SECONDS && ctx.user.lastCheckin !== d) {
-    const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const yest = dayKey(Date.now() - 86400000);
     const streak = ctx.user.lastCheckin === yest ? (ctx.user.streak || 0) + 1 : 1;
     const gainedStars = Math.max(1, Math.round(row.seconds / 60));
     await repo.users.markCheckin(ctx.user.id, { date: d, streak, gainedStars });
