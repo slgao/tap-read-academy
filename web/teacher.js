@@ -8,6 +8,12 @@
   const player = new Player();
   const S = { view: 'classes', pick: { bookId: null, pageId: null, sel: [] } };
 
+  const TAB_IC = {
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6"/>',
+    pencil: '<path d="M4 20l1.2-4.8L16 4.4a2 2 0 0 1 2.8 0l.8.8a2 2 0 0 1 0 2.8L8.8 18.8z"/><path d="M14 6.5l3.5 3.5"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  };
+
   function go(v, d) { Clip.stop(); player.stop(); S.view = v; Object.assign(S, d || {}); render(); }
 
   function render() {
@@ -16,8 +22,8 @@
     $view.className = V.noTab ? 'view no-tab' : 'view';
     $view.innerHTML = '<div class="empty">加载中…</div>';
     $tab.hidden = !V.tab;
-    if (V.tab) $tab.innerHTML = [['classes', '班级'], ['hwlist', '作业'], ['me', '我的']]
-      .map(([k, t]) => `<button class="${S.view === k ? 'on' : ''}" data-go="${k}">${t}</button>`).join('');
+    if (V.tab) $tab.innerHTML = [['classes', '班级', TAB_IC.users], ['hwlist', '作业', TAB_IC.pencil], ['me', '我的', TAB_IC.user]]
+      .map(([k, t, icon]) => `<button class="${S.view === k ? 'on' : ''}" data-go="${k}" aria-label="${t}"><span class="tab-ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></span>${t}</button>`).join('');
     Promise.resolve(V.body()).then((h) => { $view.innerHTML = h; if (V.after) V.after(); })
       .catch((e) => { $view.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   }

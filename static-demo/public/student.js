@@ -7,6 +7,49 @@
   const $tab = document.getElementById('tabbar');
   const player = new Player();
 
+  /* 线条图标（stroke=currentColor），不用 emoji */
+  const ICON = {
+    home: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/><path d="M10 19.5v-5h4v5"/>',
+    book: '<path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h11"/>',
+    headphones: '<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="5" height="7" rx="2"/><rect x="16" y="14" width="5" height="7" rx="2"/>',
+    pencil: '<path d="M4 20l1.2-4.8L16 4.4a2 2 0 0 1 2.8 0l.8.8a2 2 0 0 1 0 2.8L8.8 18.8z"/><path d="M14 6.5l3.5 3.5"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+    star: '<path fill="currentColor" stroke="none" d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3L2.9 9.5l6.3-.9z"/>',
+    image: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 16l2.5-3 2 2.2L15 12l2 4"/><circle cx="9" cy="8" r="1.5"/>',
+    mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
+    speaker: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+    repeat: '<path d="M17 3l3 3-3 3"/><path d="M4 11V9a3 3 0 0 1 3-3h13"/><path d="M7 21l-3-3 3-3"/><path d="M20 13v2a3 3 0 0 1-3 3H4"/>',
+    calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4M9 15l2 2 4-4"/>',
+  };
+  const ic = (name, cls = 'i') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name] || ''}</svg>`;
+
+  /** 等级：按星星数，给初中生也留出追求的目标 */
+  const LEVELS = [[0, '新芽'], [50, '小书虫'], [150, '阅读之星'], [300, '英语达人'], [600, '学霸']];
+  function levelOf(stars) {
+    let i = 0; while (i < LEVELS.length - 1 && stars >= LEVELS[i + 1][0]) i++;
+    const next = LEVELS[i + 1];
+    return { name: LEVELS[i][1], next: next ? next[1] : null, need: next ? next[0] - stars : 0 };
+  }
+
+  /** 庆祝：印章盖下来，星星迸出 */
+  function celebrate({ mark = '读', label = '', title, sub = '', gain = 0 }) {
+    const old = document.getElementById('celebrate'); if (old) old.remove();
+    const sparks = [[-78, -40], [74, -52], [-60, 46], [82, 30], [0, -88], [-30, 76], [40, 70], [-92, -4]]
+      .map(([dx, dy], k) => `<i class="spark" style="--dx:${dx}px;--dy:${dy}px;animation-delay:${0.22 + k * 0.03}s">${ic('star')}</i>`).join('');
+    const m = document.createElement('div');
+    m.className = 'celebrate'; m.id = 'celebrate';
+    m.innerHTML = `<div class="box" role="dialog" aria-label="${esc(title)}">
+        ${sparks}
+        <div class="stamp"><b>${esc(mark)}</b>${label ? `<span>${esc(label)}</span>` : ''}</div>
+        <h3>${esc(title)}</h3>
+        ${sub ? `<p>${esc(sub)}</p>` : '<p></p>'}
+        ${gain ? `<div class="gain">${ic('star')}+${gain} 星星</div><br>` : ''}
+        <button class="btn block" data-act="closeCelebrate">太棒了</button>
+      </div>`;
+    m.addEventListener('click', (e) => { if (e.target === m) m.remove(); });
+    document.getElementById('app').appendChild(m);
+  }
+
   const S = { view: 'home', book: null, catalog: null, page: null, hw: null, showHs: false, repeat: false, recs: {} };
   let accum = 0, pending = 0;
 
@@ -17,7 +60,10 @@
       const s = pending; pending = 0;
       try {
         const r = await API.post('/api/study/heartbeat', { seconds: s });
-        if (r.justChecked) toast(`打卡成功，连续 ${r.streak} 天`, 2600);
+        if (r.justChecked) {
+          celebrate({ mark: '读', label: '今日已打卡', title: '今天的印盖上啦', sub: `已经连续打卡 ${r.streak} 天`, gain: 0 });
+          if (S.view === 'home') render();
+        }
       } catch {}
     }
   }, 5000);
@@ -48,9 +94,10 @@
   }
 
   function renderTab() {
-    const items = [['home', '首页'], ['shelf', '教材'], ['listenlist', '听力'], ['hwlist', '作业'], ['me', '我的']];
-    $tab.innerHTML = items.map(([k, t]) =>
-      `<button class="${S.view === k ? 'on' : ''}" data-go="${k}">${t}</button>`).join('');
+    const items = [['home', '首页', 'home'], ['shelf', '教材', 'book'], ['listenlist', '听力', 'headphones'],
+      ['hwlist', '作业', 'pencil'], ['me', '我的', 'user']];
+    $tab.innerHTML = items.map(([k, t, icon]) =>
+      `<button class="${S.view === k ? 'on' : ''}" data-go="${k}" aria-label="${t}"><span class="tab-ic">${ic(icon)}</span>${t}</button>`).join('');
   }
 
   document.addEventListener('click', (e) => {
@@ -69,7 +116,7 @@
         <img src="brand/logo-192.png" alt="福斯特培训学校校徽">
         <div class="name">福斯特培训学校</div>
         <div class="en">FIRST TRAINING SCHOOL</div>
-        <div class="tag">点读课文 · 完成作业 · 每日打卡</div>
+        <div class="tag"><span style="background:var(--sky-wash);color:var(--sky-shade)">点读课文</span><span style="background:var(--mint-wash);color:var(--mint-shade)">英语听力</span><span style="background:var(--coral-wash);color:var(--coral-shade)">跟读作业</span><span style="background:var(--star-wash);color:#8A5A00">每日打卡</span></div>
       </div>
       <div class="card">
         <label class="field"><span>姓名</span><input id="i-name" placeholder="例如：李小明" value="李小明" autocomplete="name"></label>
@@ -84,50 +131,55 @@
 
   /* ---------- 首页 ---------- */
   const HOME = {
-    top: () => `<h1><img src="brand/logo-96.png" alt="">福斯特</h1><span class="sub">${esc((Store.user || {}).name || '')}</span>`,
+    top: () => `<h1><img src="brand/logo-96.png" alt="">福斯特</h1><span class="star-pill" id="top-stars">${ic('star')}<span>…</span></span>`,
     tab: true,
     body: async () => {
-      const [sum, hws, books] = await Promise.all([
-        API.get('/api/study/summary'), API.get('/api/homeworks'), API.get('/api/books'),
-      ]);
+      const [sum, hws] = await Promise.all([API.get('/api/study/summary'), API.get('/api/homeworks')]);
       const todo = hws.filter((h) => h.status === 'todo' || h.status === 'rejected');
       // 只算今天；sum.days[0] 是最近有记录的一天，不一定是今天
       const todayRow = sum.days.find((d) => d.date === new Date().toISOString().slice(0, 10));
-      const mins = Math.round((todayRow ? todayRow.seconds : 0) / 60);
+      const secs = todayRow ? todayRow.seconds : 0;
+      const pct = Math.min(100, Math.round((secs / sum.needSeconds) * 100));
+      const needMin = Math.max(1, Math.round(sum.needSeconds / 60));
+      const leftMin = Math.max(1, Math.ceil((sum.needSeconds - secs) / 60));
+      const lv = levelOf(sum.stars);
+      const st = document.querySelector('#top-stars span'); if (st) st.textContent = sum.stars;
       return `
-      <div class="hero">
-        <h2>${greeting()}，${esc((Store.user || {}).name || '同学')}</h2>
-        <div class="small">${sum.checkedInToday ? '今天的印已经盖上了' : `今天读满 ${Math.round(sum.needSeconds / 60) || 1} 分钟，就能盖上今天的印`}</div>
-        ${sealRow(sum)}
-        <div class="row between mt"><span></span><a class="small" style="color:var(--ink)" data-act="poster" role="button">生成学习海报 ›</a></div>
-        <div class="stats">
-          <div><b>${sum.streak}</b><span>连续打卡天数</span></div>
-          <div><b>${sum.stars}</b><span>星星</span></div>
-          <div><b>${mins}</b><span>今天读了几分钟</span></div>
-        </div>
+      <div class="hello">
+        <h2>${esc((Store.user || {}).name || '同学')}，${greeting()}！</h2>
+        <div class="level"><b>${lv.name}</b>${lv.next ? `再得 ${lv.need} 颗星升级「${lv.next}」` : '已经是最高等级'}</div>
       </div>
 
       <div class="card">
-        <div class="row between mb"><div class="section-title">今日作业</div><span class="pill ${todo.length ? 'todo' : 'ok'}">${todo.length ? todo.length + ' 项待完成' : '全部完成'}</span></div>
-        ${todo.length ? todo.slice(0, 3).map((h, i) => `
+        <div class="goal">
+          <div class="ring" style="--p:${pct}" role="img" aria-label="今日目标完成 ${pct}%">
+            <div class="ring-in"><b>${Math.floor(secs / 60)}</b><span>${pct >= 100 ? '已达成' : `/ ${needMin} 分钟`}</span></div>
+          </div>
+          <div class="goal-text grow">
+            <div class="strong">${sum.checkedInToday ? '今日目标完成，印已盖好' : `再读 ${leftMin} 分钟就能盖印`}</div>
+            <div class="muted small">点读课文或者听力都算时间</div>
+            <div class="streak">${ic('calendar')}连续打卡 ${sum.streak} 天</div>
+          </div>
+        </div>
+        ${sealRow(sum)}
+      </div>
+
+      <div class="tiles">
+        <button class="tile sky" data-go="shelf"><span class="t-ic">${ic('book')}</span><div><b>点读课本</b><span>点哪句读哪句</span></div></button>
+        <button class="tile mint" data-go="listenlist"><span class="t-ic">${ic('headphones')}</span><div><b>听力</b><span>整课连着听</span></div></button>
+        <button class="tile coral" data-go="hwlist">${todo.length ? `<i class="badge">${todo.length}</i>` : ''}<span class="t-ic">${ic('pencil')}</span><div><b>做作业</b><span>${todo.length ? `还有 ${todo.length} 项` : '都做完啦'}</span></div></button>
+        <button class="tile star" data-act="poster"><span class="t-ic">${ic('image')}</span><div><b>学习海报</b><span>晒晒我的打卡</span></div></button>
+      </div>
+
+      ${todo.length ? `<div class="card">
+        <div class="row between mb"><div class="section-title">今日作业</div><span class="pill todo">${todo.length} 项待完成</span></div>
+        ${todo.slice(0, 3).map((h, i) => `
           <div class="listitem" data-go="hwdetail" data-arg='${JSON.stringify({ hwId: h.id })}'>
-<div class="n">${i + 1}</div>
+            <div class="n">${i + 1}</div>
             <div class="grow"><div class="strong ellip">${esc(h.title)}</div><div class="muted small">${h.itemCount} 句 · ${esc(h.className)}</div></div>
             <span class="muted">›</span>
-          </div>`).join('') : '<div class="muted small">老师还没有布置新作业</div>'}
-      </div>
-
-      <div class="card">
-        <div class="row between mb"><div class="section-title">教材</div><a class="small" style="color:var(--ink)" data-go="shelf">全部 ›</a></div>
-        ${books.map((b) => `
-          <div class="booktile" data-go="catalog" data-arg='${JSON.stringify({ bookId: b.id })}'>
-<div class="cv">${esc(b.title.slice(0, 1))}</div>
-            <div class="grow"><div class="strong ellip">${esc(b.title)}</div>
-              <div class="muted small ellip">${esc(b.subtitle || '')}</div>
-              <div class="muted small">${b.lessonCount} 课 · ${b.pageCount} 页</div></div>
-            <span class="muted">›</span>
           </div>`).join('')}
-      </div>`;
+      </div>` : ''}`;
     },
   };
 
@@ -151,7 +203,7 @@
 
   /* ---------- 目录 ---------- */
   const CATALOG = {
-    top: () => `<button class="back" data-go="shelf">‹</button><h1>${esc((S.catalog && S.catalog.book.title) || '目录')}</h1>`,
+    top: () => `<button class="back" data-go="shelf">‹</button><h1><span class="t">${esc((S.catalog && S.catalog.book.title) || '目录')}</span></h1>`,
     noTab: true,
     body: async () => {
       const data = await API.get(`/api/books/${S.bookId}/catalog`);
@@ -175,7 +227,7 @@
   /* ---------- 点读器 ---------- */
   const READER = {
     top: () => `<button class="back" data-act="leaveReader">‹</button>
-      <h1>${esc((S.page && S.page.lesson.title) || '点读')} <span class="sub">P${(S.page && S.page.page.pageNo) || ''}</span></h1>
+      <h1><span class="t">${esc((S.page && S.page.lesson.title) || '点读')}</span><span class="sub">P${(S.page && S.page.page.pageNo) || ''}</span></h1>
       <button class="iconbtn ${S.showHs ? 'on' : ''}" data-act="toggleHs" title="显示/隐藏热区">框</button>`,
     bare: true,
     body: async () => {
@@ -196,13 +248,12 @@
           <div class="subtitle" id="sub-en">点击句子即可播放</div>
           <div class="subtitle-cn" id="sub-cn">${d.hotspots.length} 个点读句</div>
           <div class="ctrls">
-            <button class="btn sm" data-act="playAll" id="btn-all">连播</button>
-            <button class="iconbtn ${S.repeat ? 'on' : ''}" data-act="toggleRepeat" title="单句复读">⟳</button>
+            <button class="btn sm sky" data-act="playAll" id="btn-all">连播</button>
+            <button class="iconbtn ${S.repeat ? 'on' : ''}" data-act="toggleRepeat" aria-label="单句复读">${ic('repeat')}</button>
             <button class="iconbtn" data-act="cycleRate" id="btn-rate" style="font-size:12px;font-weight:700">1.0×</button>
-            <button class="iconbtn ${player.mode === 'audio' ? 'on' : ''}" data-act="toggleSrc" id="btn-src" style="font-size:11px;font-weight:700" title="TTS 朗读 / 原始音轨">${player.mode === 'tts' ? 'TTS' : '原音'}</button>
             <div class="grow"></div>
-            <button class="iconbtn rec" data-act="recToggle" id="btn-rec">录</button>
-            <button class="iconbtn" data-act="playMyRec" id="btn-myrec" hidden>听</button>
+            <button class="iconbtn rec" data-act="recToggle" id="btn-rec" aria-label="跟读录音">${ic('mic')}</button>
+            <button class="iconbtn" data-act="playMyRec" id="btn-myrec" aria-label="听我的录音" hidden>${ic('speaker')}</button>
           </div>
           <div class="muted small mt" style="display:flex;justify-content:space-between">
             <span>${d.prevPageId ? '‹ 上一页' : ''}</span>
@@ -213,13 +264,16 @@
     },
     after: () => {
       player.onTick((hs) => {
+        // 播放器是全局共用的：离开点读页后（比如作业页点"原音"）不再更新点读页的元素
+        if (S.view !== 'reader' || !S.page) return;
         document.querySelectorAll('.hs').forEach((el) => el.classList.remove('active'));
         if (!hs) return;
         const i = S.page.hotspots.findIndex((h) => h.id === hs.id);
         const el = document.querySelector(`.hs[data-i="${i}"]`);
         if (el) { el.classList.add('active'); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
-        document.getElementById('sub-en').textContent = hs.en || '';
-        document.getElementById('sub-cn').textContent = hs.cn || '';
+        const en = document.getElementById('sub-en'), cn = document.getElementById('sub-cn');
+        if (en) en.textContent = hs.en || '';
+        if (cn) cn.textContent = hs.cn || '';
       });
       const pw = $view.querySelector('.pagewrap');
       if (pw) {
@@ -251,7 +305,7 @@
 
   /* ---------- 作业详情 ---------- */
   const HWDETAIL = {
-    top: () => `<button class="back" data-go="hwlist">‹</button><h1>${esc((S.hw && S.hw.title) || '作业')}</h1>`,
+    top: () => `<button class="back" data-go="hwlist">‹</button><h1><span class="t">${esc((S.hw && S.hw.title) || '作业')}</span></h1>`,
     noTab: true,
     body: async () => {
       const hw = await API.get(`/api/homeworks/${S.hwId}`);
@@ -268,11 +322,10 @@
         </div>
         <div class="row between mb">
           <button class="btn sm ghost" data-act="hwOpenPage">打开课本页</button>
-          <button class="iconbtn ${player.mode === 'audio' ? 'on' : ''}" data-act="toggleSrc" style="font-size:11px;font-weight:700">${player.mode === 'tts' ? 'TTS' : '原音'}</button>
         </div>
         <div id="hw-items">${hw.items.map((it, i) => itemHtml(it, i)).join('')}</div>
         ${done ? '' : `<button class="btn block mt" data-act="hwSubmit" id="btn-submit">提交作业</button>`}
-        <div class="muted small center mt">录音需要麦克风权限（localhost 下可用）</div>`;
+        <div class="muted small center mt">第一次录音时，请允许使用麦克风</div>`;
     },
   };
 
@@ -282,9 +335,9 @@
       <div class="en">${i + 1}. ${esc(it.en)}</div>
       <div class="cn">${esc(it.cn || '')}</div>
       <div class="row" style="gap:8px">
-        <button class="btn sm grey" data-act="hwPlay" data-i="${i}">原音</button>
-        <button class="btn sm ${rec ? 'ghost' : ''}" data-act="hwRec" data-hid="${it.hotspotId}" data-i="${i}">${rec ? '重录' : '跟读'}</button>
-        ${rec && rec.url ? `<button class="btn sm grey" data-act="hwPlayRec" data-hid="${it.hotspotId}">我的</button>` : ''}
+        <button class="btn sm sky" data-act="hwPlay" data-i="${i}">${ic('speaker')}原音</button>
+        <button class="btn sm ${rec ? 'ghost' : 'coral'}" data-act="hwRec" data-hid="${it.hotspotId}" data-i="${i}">${ic('mic')}${rec ? '重录' : '跟读'}</button>
+        ${rec && rec.url ? `<button class="btn sm ghost" data-act="hwPlayRec" data-hid="${it.hotspotId}">我的</button>` : ''}
         ${rec ? '<span class="pill ok">已录</span>' : ''}
       </div>
     </div>`;
@@ -304,8 +357,13 @@
         cells.push(`<div class="${map[d] && map[d].seconds >= sum.needSeconds ? 'on' : ''}">${Number(d.slice(8))}</div>`);
       }
       return `
-        <div class="hero"><h2>${esc((Store.user || {}).name || '')}</h2>
-          <div class="small">${me.classes.map((c) => esc(c.name)).join('、') || '还没加入班级'}</div>
+        <div class="hero">
+          <div class="row" style="gap:14px">
+            <div class="avatar">${esc(((Store.user || {}).name || '同').slice(-2))}</div>
+            <div class="grow"><h2>${esc((Store.user || {}).name || '')}</h2>
+              <div class="small">${me.classes.map((c) => esc(c.name)).join('、') || '还没加入班级'}</div>
+              <div class="level-line"><b>${levelOf(sum.stars).name}</b></div></div>
+          </div>
           <div class="stats">
             <div><b>${sum.streak}</b><span>连续打卡</span></div>
             <div><b>${sum.stars}</b><span>星星</span></div>
@@ -315,7 +373,7 @@
           <div class="muted small mt">当天点读满 ${sum.needSeconds} 秒就盖一个印（正式版为 5 分钟）</div></div>
         <div class="card"><div class="row between"><div><div class="section-title">学习海报</div>
           <div class="muted small">把打卡和星星做成一张图，发给家人朋友</div></div>
-          <button class="btn sm" data-act="poster">生成</button></div></div>
+          <button class="btn sm star" data-act="poster">生成</button></div></div>
         <div class="card"><div class="row between"><span>切换账号</span><button class="btn sm grey" data-act="logout">退出登录</button></div></div>`;
     },
   };
@@ -682,12 +740,14 @@
       const box = document.getElementById('ls-lines'); if (box) box.classList.toggle('hide-cn', !Listen.showCn);
     },
     async poster(el) {
+      const plain = !el.querySelector('*');
       const label = el.textContent;
-      el.textContent = '生成中…';
+      if (plain) el.textContent = '生成中…'; else toast('正在生成海报…', 1200);
       try { showPoster(await drawPoster()); }
       catch (e) { toast('海报生成失败：' + e.message); }
-      finally { el.textContent = label; }
+      finally { if (plain) el.textContent = label; }
     },
+    closeCelebrate() { const m = document.getElementById('celebrate'); if (m) m.remove(); },
     closePoster() { closePoster(); },
     async login() {
       const name = document.getElementById('i-name').value.trim();
@@ -706,12 +766,6 @@
     cycleRate() {
       const seq = [0.75, 1, 1.25]; const i = (seq.indexOf(player.rate) + 1) % seq.length;
       player.setRate(seq[i]); document.getElementById('btn-rate').textContent = seq[i].toFixed(2).replace(/0$/, '') + '×';
-    },
-    toggleSrc(el) {
-      player.mode = player.mode === 'tts' ? 'audio' : 'tts';
-      el.textContent = player.mode === 'tts' ? 'TTS' : '原音';
-      el.classList.toggle('on', player.mode === 'audio');
-      toast(player.mode === 'tts' ? '已切换为浏览器 TTS 朗读' : '已切换为原始音轨（按时间区间 seek）');
     },
     tapHs(el) {
       const i = Number(el.dataset.i);
@@ -763,12 +817,16 @@
     async hwSubmit(el) {
       const items = S.hw.items
         .filter((it) => S.recs[it.hotspotId] && S.recs[it.hotspotId].base64)
-        .map((it) => ({ hotspotId: it.hotspotId, ...S.recs[it.hotspotId] }));
+        .map((it) => {
+          const r = S.recs[it.hotspotId];
+          // 字段名必须是 audioBase64（和服务端、小程序端一致）；之前发的是 base64，录音被服务端静默丢弃
+          return { hotspotId: it.hotspotId, audioBase64: r.base64, ext: r.ext, durationMs: r.durationMs };
+        });
       if (!items.length) return toast('至少录一句再提交');
       el.disabled = true; el.textContent = '提交中…';
       try {
         await API.post(`/api/homeworks/${S.hw.id}/submit`, { items, elapsedSec: accum });
-        toast('提交成功');
+        celebrate({ mark: '交', label: '作业已提交', title: '作业交上啦', sub: '老师批改后，这里就能看到星星和评语', gain: 5 });
         go('hwlist');
       } catch (e) { toast(e.message); el.disabled = false; el.textContent = '提交作业'; }
     },

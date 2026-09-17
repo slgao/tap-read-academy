@@ -211,34 +211,9 @@
       }, 60);   // 模拟一点网络延迟，手感更真实
     }));
 
-  let voiceChecked = null;
-  function hasEnVoice() {
-    if (voiceChecked !== null) return voiceChecked;
-    try {
-      const vs = speechSynthesis.getVoices() || [];
-      if (!vs.length) return true;
-      voiceChecked = vs.some((v) => /^en/i.test(v.lang));
-      if (!voiceChecked) setTimeout(() => g.App.toast('本机没有英文语音，已切换到课文录音', 3200), 800);
-      return voiceChecked;
-    } catch { voiceChecked = false; return false; }
-  }
-
   function install() {
     g.App.API = { get: wrap('GET'), post: wrap('POST'), put: wrap('PUT'), del: wrap('DELETE') };
 
-    // 体验版自带课文录音，默认直接放音频文件 —— 比依赖设备的语音合成可靠
-    // （安卓微信内置浏览器常常没有英文语音包）
-    const Base = g.App.Player;
-    function DemoPlayer() { const p = new Base(); p.mode = 'audio'; return p; }
-    DemoPlayer.prototype = Base.prototype;
-    g.App.Player = DemoPlayer;
-
-    const proto = Base.prototype;
-    const origPlay = proto.play;
-    proto.play = function (hs, onEnd) {
-      if (this.mode === 'tts' && !hasEnVoice()) this.mode = 'audio';
-      return origPlay.call(this, hs, onEnd);
-    };
   }
 
   if (g.App) install(); else window.addEventListener('DOMContentLoaded', install);

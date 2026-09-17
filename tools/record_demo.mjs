@@ -169,7 +169,7 @@ async function tap(page, hotspotIdx, src, sentenceIdx) {
   await sleep(600);
   await page.click('.listitem[data-go="reader"]');
   await page.waitForSelector('.hs', { timeout: 8000 });
-  await page.click('[data-act="toggleSrc"]');           // 切到原音
+  // 播放器默认就放课文音频，不需要切换
   await sleep(2300);                                    // 等提示条淡出，别压着字幕
 
   await cap(page, '点课文里<b>任意一句</b>，就出真人发音');

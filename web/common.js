@@ -79,15 +79,15 @@
   };
 
   /* ---------------- 播放器 ----------------
-   * mode='tts'   浏览器语音合成朗读英文（Demo 默认；占位音轨听不出内容）
-   * mode='audio' 播放真实音频文件，按 startMs~endMs 精确 seek —— 这是小程序端的真实逻辑
+   * 有课文音频就播音频（按 startMs~endMs 精确 seek，和小程序端逻辑一致）；
+   * 没有音频才退回浏览器语音合成；两者都没有就提示还没配音。
+   * 微信内置浏览器没有语音合成，所以绝不能默认走语音合成。
    */
   class Player {
     constructor() {
       PLAYERS.push(this);
       this.el = new Audio();
       this.el.preload = 'auto';
-      this.mode = 'tts';
       this.rate = 1;
       this.gap = 400;
       this._stopTimer = null;
@@ -121,9 +121,9 @@
       this.current = hs;
       if (this._onTick) this._onTick(hs);
 
-      const useTts = this.mode === 'tts' || !hs.audio || !hs.audio.url;
-      if (useTts) {
-        if (!('speechSynthesis' in window)) { toast('此浏览器不支持语音合成，请切换到「原音」'); this._finish(); return; }
+      const hasAudio = !!(hs.audio && hs.audio.url && (hs.endMs || 0) > (hs.startMs || 0));
+      if (!hasAudio) {
+        if (!('speechSynthesis' in window) || !hs.en) { toast('这句还没有配音'); this._finish(); return; }
         const u = new SpeechSynthesisUtterance(hs.en || '');
         u.lang = 'en-US'; u.rate = 0.9 * this.rate;
         u.onend = () => this._finish();

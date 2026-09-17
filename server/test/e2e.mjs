@@ -107,6 +107,12 @@ const TAG = '__e2e_' + Date.now();
   const sHw = await call('GET', `/api/homeworks/${hw.id}`, null, S.token);
   check('学生看到待完成', sHw.status === 'todo' && sHw.items.length === 2, sHw.title);
 
+  // 字段名写错（没有 audioBase64）时必须被拒绝，而不是静默成功
+  const noAudio = await expectFail('POST', `/api/homeworks/${hw.id}/submit`, {
+    items: sHw.items.map((it) => ({ hotspotId: it.hotspotId, base64: TINY_MP3, ext: 'mp3' })),
+  }, S.token);
+  check('没有录音数据的提交被拒绝', /没有收到录音/.test(noAudio || ''), noAudio);
+
   const sub = await call('POST', `/api/homeworks/${hw.id}/submit`, {
     items: sHw.items.map((it) => ({ hotspotId: it.hotspotId, audioBase64: TINY_MP3, ext: 'mp3', durationMs: 1200 })),
     elapsedSec: 60,

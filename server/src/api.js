@@ -307,8 +307,9 @@ on('GET', '/api/homeworks/:id', async (ctx) => {
 on('POST', '/api/homeworks/:id/submit', async (ctx) => {
   const hw = await repo.homeworks.byId(ctx.params.id);
   if (!hw) return fail(ctx.res, 3004, '作业不存在');
-  const items = Array.isArray(ctx.body.items) ? ctx.body.items : [];
-  if (!items.length) return fail(ctx.res, 1001, '没有录音内容');
+  const items = (Array.isArray(ctx.body.items) ? ctx.body.items : []).filter((it) => it && it.audioBase64);
+  // 一段录音都没收到就拒绝，不能静默记成"已提交"（曾因字段名不一致丢过所有网页端录音）
+  if (!items.length) return fail(ctx.res, 1001, '没有收到录音，请重新录一次再提交');
 
   let sub = await repo.submissions.byHomeworkAndStudent(hw.id, ctx.user.id);
   if (sub && sub.status === 'reviewed') return fail(ctx.res, 3005, '作业已批改，如需重交请让老师打回');
