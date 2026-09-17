@@ -70,6 +70,7 @@
 
   /* ---------- 路由 ---------- */
   function go(view, data) {
+    if (Rec.mr) { Rec.cancel(); S.recQ = null; toast('这次录音没保存'); }   // 离开页面把麦克风放掉
     Clip.stop();
     closePoster();
     if (view !== 'reader') player.stop();

@@ -13,8 +13,25 @@
 const { db } = require('./db');
 const { now } = require('./util');
 
-const q = (sql) => db.prepare(sql);
+/**
+ * 预编译语句缓存：同一条 SQL 只 prepare 一次。
+ * 这些接口里不少是循环里反复查同一条语句，重复编译的开销比查询本身还大。
+ */
+const stmts = new Map();
+const q = (sql) => {
+  let st = stmts.get(sql);
+  if (!st) { st = db.prepare(sql); stmts.set(sql, st); }
+  return st;
+};
 const num = (v) => Number(v);
+/** IN (?,?,?) 占位符 */
+const marks = (list) => list.map(() => '?').join(',');
+/** 批量查询结果整理成 Map，配合上面的 IN 查询，避免在循环里一条条查 */
+const mapBy = (rows, key, val) => {
+  const m = new Map();
+  for (const r of rows) m.set(r[key], val ? val(r) : r);
+  return m;
+};
 
 /* ---------- 行 → 领域对象 ---------- */
 const toUser = (r) => r && ({
@@ -150,6 +167,17 @@ const classes = {
               JOIN users u ON u.id=m.student_id WHERE m.class_id=? ORDER BY u.stars DESC`).all(num(classId));
   },
   async memberCount(classId) { return count('SELECT COUNT(*) n FROM class_members WHERE class_id=?', num(classId)); },
+  /** 一次取多个班（列表页用，避免一个班一条查询） */
+  async byIds(ids) {
+    if (!ids.length) return new Map();
+    return mapBy(q(`SELECT * FROM classes WHERE id IN (${marks(ids)})`).all(...ids.map(num)), 'id', toClass);
+  },
+  /** 多个班的人数：classId -> 人数 */
+  async memberCounts(ids) {
+    if (!ids.length) return new Map();
+    return mapBy(q(`SELECT class_id, COUNT(*) n FROM class_members WHERE class_id IN (${marks(ids)}) GROUP BY class_id`)
+      .all(...ids.map(num)), 'class_id', (r) => r.n);
+  },
 };
 
 /* ---------- books / lessons / pages / hotspots ---------- */
@@ -198,6 +226,11 @@ const lessons = {
 const pages = {
   async byId(id) { return toPage(q('SELECT * FROM pages WHERE id=?').get(num(id))); },
   async byLesson(lessonId) { return q('SELECT * FROM pages WHERE lesson_id=? ORDER BY sort, id').all(num(lessonId)).map(toPage); },
+  /** 整本书按「课顺序 + 页顺序」排好的页面 id，用于连续翻页 */
+  async idsByBook(bookId) {
+    return q(`SELECT p.id FROM pages p JOIN lessons l ON l.id=p.lesson_id
+              WHERE l.book_id=? ORDER BY l.sort, l.id, p.sort, p.id`).all(num(bookId)).map((r) => r.id);
+  },
   async idsByLesson(lessonId) { return q('SELECT id FROM pages WHERE lesson_id=? ORDER BY sort, id').all(num(lessonId)).map((r) => r.id); },
   async countByLesson(lessonId) { return count('SELECT COUNT(*) n FROM pages WHERE lesson_id=?', num(lessonId)); },
   async create({ lessonId, pageNo, imgId, imgW, imgH, sort }) {
@@ -216,6 +249,25 @@ const hotspots = {
   async byId(id) { return toHotspot(q('SELECT * FROM hotspots WHERE id=?').get(num(id))); },
   async byPage(pageId) { return q('SELECT * FROM hotspots WHERE page_id=? ORDER BY sort, id').all(num(pageId)).map(toHotspot); },
   async countByPage(pageId) { return count('SELECT COUNT(*) n FROM hotspots WHERE page_id=?', num(pageId)); },
+  /** 每页热区数：pageId -> 个数 */
+  async countsByPages(pageIds) {
+    if (!pageIds.length) return new Map();
+    return mapBy(q(`SELECT page_id, COUNT(*) n FROM hotspots WHERE page_id IN (${marks(pageIds)}) GROUP BY page_id`)
+      .all(...pageIds.map(num)), 'page_id', (r) => r.n);
+  },
+  /** 每课带时间轴的句子数（听力列表用）：lessonId -> 句数 */
+  async listenCountsByBook(bookId) {
+    return mapBy(q(`SELECT p.lesson_id, COUNT(*) n FROM hotspots h
+                    JOIN pages p ON p.id=h.page_id JOIN lessons l ON l.id=p.lesson_id
+                    WHERE l.book_id=? AND h.end_ms > h.start_ms GROUP BY p.lesson_id`)
+      .all(num(bookId)), 'lesson_id', (r) => r.n);
+  },
+  /** 整课的句子（按音频时间排好），听力播放页用 */
+  async byLessonTimeline(lessonId) {
+    return q(`SELECT h.*, p.page_no FROM hotspots h JOIN pages p ON p.id=h.page_id
+              WHERE p.lesson_id=? AND h.end_ms > h.start_ms ORDER BY h.start_ms`)
+      .all(num(lessonId)).map((r) => ({ ...toHotspot(r), pageNo: r.page_no }));
+  },
   /**
    * 整页保存热区（标注后台用）。
    *
@@ -258,6 +310,16 @@ const hotspots = {
 /* ---------- assets（只管数据库记录，文件读写在 storage.js） ---------- */
 const assets = {
   async byId(id) { return id ? toAsset(q('SELECT * FROM assets WHERE id=?').get(num(id))) : null; },
+  /** 一次取多个资产：id -> 资产（批改页、作品页一次要几十张图） */
+  async byIds(ids) {
+    const list = [...new Set(ids.filter(Boolean).map(num))];
+    if (!list.length) return new Map();
+    return mapBy(q(`SELECT * FROM assets WHERE id IN (${marks(list)})`).all(...list), 'id', toAsset);
+  },
+  async remove(ids) {
+    const list = [...new Set(ids.filter(Boolean).map(num))];
+    if (list.length) q(`DELETE FROM assets WHERE id IN (${marks(list)})`).run(...list);
+  },
   async create({ kind, relPath, mime, durationMs, sizeBytes, placeholder }) {
     const r = q(`INSERT INTO assets (kind, rel_path, mime, duration_ms, size_bytes, is_placeholder, created_at)
                  VALUES (?,?,?,?,?,?,?)`)
@@ -320,6 +382,27 @@ const submissions = {
     return toSubmission(q('SELECT * FROM submissions WHERE homework_id=? AND student_id=?').get(num(homeworkId), num(studentId)));
   },
   async countByHomework(homeworkId) { return count('SELECT COUNT(*) n FROM submissions WHERE homework_id=?', num(homeworkId)); },
+  /** 一个学生在多份作业里的提交：homeworkId -> 提交 */
+  async byStudentForHomeworks(studentId, homeworkIds) {
+    if (!homeworkIds.length) return new Map();
+    return mapBy(q(`SELECT * FROM submissions WHERE student_id=? AND homework_id IN (${marks(homeworkIds)})`)
+      .all(num(studentId), ...homeworkIds.map(num)), 'homework_id', toSubmission);
+  },
+  /** 多份作业的提交/批改份数：homeworkId -> { submitted, reviewed } */
+  async statsByHomeworks(homeworkIds) {
+    if (!homeworkIds.length) return new Map();
+    return mapBy(q(`SELECT homework_id, COUNT(*) n, SUM(CASE WHEN status='reviewed' THEN 1 ELSE 0 END) r
+                    FROM submissions WHERE homework_id IN (${marks(homeworkIds)}) GROUP BY homework_id`)
+      .all(...homeworkIds.map(num)), 'homework_id', (x) => ({ submitted: x.n, reviewed: x.r || 0 }));
+  },
+  /** 一份作业里全班的提交：studentId -> 提交 */
+  async byHomeworkForStudents(homeworkId) {
+    return mapBy(q('SELECT * FROM submissions WHERE homework_id=?').all(num(homeworkId)), 'student_id', toSubmission);
+  },
+  async byIds(ids) {
+    if (!ids.length) return new Map();
+    return mapBy(q(`SELECT * FROM submissions WHERE id IN (${marks(ids)})`).all(...ids.map(num)), 'id', toSubmission);
+  },
   async countReviewed(homeworkId) {
     return count(`SELECT COUNT(*) n FROM submissions WHERE homework_id=? AND status='reviewed'`, num(homeworkId));
   },
@@ -397,6 +480,12 @@ const subjects = {
 
 /* ---------- 题目与作答 ---------- */
 const questions = {
+  /** 多份作业的题目数：homeworkId -> 题数 */
+  async countsByHomeworks(homeworkIds) {
+    if (!homeworkIds.length) return new Map();
+    return mapBy(q(`SELECT homework_id, COUNT(*) n FROM questions WHERE homework_id IN (${marks(homeworkIds)}) GROUP BY homework_id`)
+      .all(...homeworkIds.map(num)), 'homework_id', (r) => r.n);
+  },
   async byHomework(homeworkId) {
     return q('SELECT * FROM questions WHERE homework_id=? ORDER BY sort, id').all(num(homeworkId)).map(toQuestion);
   },
@@ -405,6 +494,16 @@ const questions = {
 const answers = {
   async bySubmission(submissionId) {
     return q('SELECT * FROM answers WHERE submission_id=?').all(num(submissionId)).map(toAnswer);
+  },
+  /** 多份提交的作答：submissionId -> 作答数组（老师批改页一次取全班） */
+  async bySubmissions(ids) {
+    if (!ids.length) return new Map();
+    const out = new Map();
+    for (const r of q(`SELECT * FROM answers WHERE submission_id IN (${marks(ids)})`).all(...ids.map(num))) {
+      const list = out.get(r.submission_id) || out.set(r.submission_id, []).get(r.submission_id);
+      list.push(toAnswer(r));
+    }
+    return out;
   },
   async byId(id) { return toAnswer(q('SELECT * FROM answers WHERE id=?').get(num(id))); },
   /** 整份重交：清掉旧作答再写入 */
@@ -445,11 +544,24 @@ const shares = {
   },
   async revoke(id) { q(`UPDATE shares SET status='revoked', revoked_at=? WHERE id=?`).run(now(), num(id)); },
   /** 同一访客只计一次浏览 */
+  /** 还在分享中的作品图 —— 这些资产不能跟着重交被删掉 */
+  async activeAssetIds() {
+    const out = new Set();
+    for (const r of q("SELECT photo_ids FROM shares WHERE status='active'").all()) {
+      for (const id of parseJSON(r.photo_ids, [])) out.add(Number(id));
+    }
+    return out;
+  },
   async addView(shareId, visitor) {
     const r = q('INSERT OR IGNORE INTO share_views (share_id, visitor, first_at) VALUES (?,?,?)').run(num(shareId), visitor, now());
     if (r.changes) q('UPDATE shares SET views=views+1 WHERE id=?').run(num(shareId));
   },
   /** 作品展：书法作品里仍在分享中的 */
+  async galleryRows(subjectId, limit = 60) {
+    return q(`SELECT s.* FROM shares s JOIN submissions su ON su.id=s.submission_id
+              WHERE s.status='active' AND s.subject_id=? AND su.excellent=1
+              ORDER BY s.id DESC LIMIT ${num(limit)}`).all(num(subjectId)).map(toShare);
+  },
   async gallery(subjectId, limit = 60) {
     return q(`SELECT * FROM shares WHERE status='active' AND type='work' AND subject_id=? ORDER BY id DESC LIMIT ${num(limit)}`)
       .all(num(subjectId)).map(toShare);

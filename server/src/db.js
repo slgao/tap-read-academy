@@ -18,6 +18,8 @@ fs.mkdirSync(path.join(CONTENT_DIR, 'stems'), { recursive: true });
 const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
+// WAL 下 NORMAL 已经能保证掉电不坏库（最多丢最后一两次写），写入比 FULL 快很多
+db.exec('PRAGMA synchronous = NORMAL');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -245,6 +247,13 @@ CREATE TABLE IF NOT EXISTS leads (
 CREATE INDEX IF NOT EXISTS idx_q_hw ON questions(homework_id, sort);
 CREATE INDEX IF NOT EXISTS idx_share_student ON shares(student_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at);
+-- 下面这些是按外键查的高频路径：学生查自己的班、自己的提交，老师批改时按提交查作答
+CREATE INDEX IF NOT EXISTS idx_member_student ON class_members(student_id);
+CREATE INDEX IF NOT EXISTS idx_sub_student ON submissions(student_id);
+CREATE INDEX IF NOT EXISTS idx_subitem_sub ON submission_items(submission_id);
+CREATE INDEX IF NOT EXISTS idx_answer_sub ON answers(submission_id);
+CREATE INDEX IF NOT EXISTS idx_class_teacher ON classes(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_share_status ON shares(status, subject_id);
 `);
 
 /** 已有表加列：线上库已有数据，不能重建表 */

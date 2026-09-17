@@ -11,9 +11,17 @@ const grading = require('./grading');
 const CHECKIN_SECONDS = 60;   // 当日有效点读满 60 秒即算打卡（PRD 正式值为 5 分钟，demo 调小便于体验）
 
 /* ---------- 视图辅助 ---------- */
+const assetOut = (a) => (a ? { id: a.id, url: store.urlOf(a.relPath), durationMs: a.durationMs, placeholder: a.placeholder } : null);
+
 async function assetView(id) {
-  const a = await repo.assets.byId(id);
-  return a ? { id: a.id, url: store.urlOf(a.relPath), durationMs: a.durationMs, placeholder: a.placeholder } : null;
+  return assetOut(await repo.assets.byId(id));
+}
+
+/** 一次把要用到的资产查出来，循环里从 Map 取，不再一条条查库 */
+async function assetMap(ids) {
+  const out = new Map();
+  for (const [id, a] of await repo.assets.byIds(ids)) out.set(id, assetOut(a));
+  return out;
 }
 
 /** 落盘 + 建资产记录，返回资产视图用的 id */
@@ -25,6 +33,23 @@ async function putAsset(kind, base64, ext, opts = {}) {
     kind, relPath, mime: opts.mime || '', durationMs, sizeBytes: size, placeholder: opts.placeholder,
   });
   return { asset, relPath };
+}
+
+/** 落盘 + 建资产记录（内容已经是二进制，不再走 base64） */
+async function putAssetBuf(kind, buf, ext, opts = {}) {
+  const { relPath, size } = await store.saveBuf(kind, buf, ext);
+  const asset = await repo.assets.create({ kind, relPath, mime: opts.mime || '', durationMs: opts.durationMs || 0, sizeBytes: size });
+  return { asset, relPath };
+}
+
+/** 重交作业时清掉上一次的照片/录音：文件和资产记录一起删，正在分享的作品图不动 */
+async function dropAssets(ids) {
+  const list = [...new Set(ids.filter(Boolean))];
+  if (!list.length) return;
+  const keep = await repo.shares.activeAssetIds();
+  const assets = await repo.assets.byIds(list.filter((id) => !keep.has(Number(id))));
+  for (const a of assets.values()) await store.remove(a.relPath);
+  await repo.assets.remove([...assets.keys()]);
 }
 
 async function userFromToken(req) {
@@ -100,6 +125,12 @@ on('GET', '/api/me', async (ctx) => {
 /** 年级段：同一科目按年级段分班 */
 const GRADE_BANDS = ['一二年级', '三四年级', '五六年级', '初中', '不分年级'];
 
+/** 老师只能看自己带的班，学生只能看自己在的班；admin 不限 */
+async function canTouchClass(user, classId) {
+  if (user.role === 'admin') return true;
+  return (await repo.classes.idsForUser(user)).includes(Number(classId));
+}
+
 async function classView(c) {
   return { id: c.id, name: c.name, inviteCode: c.inviteCode, teacherId: c.teacherId,
     subject: subjectView(await repo.subjects.byId(c.subjectId)), gradeBand: c.gradeBand,
@@ -108,10 +139,13 @@ async function classView(c) {
 
 on('GET', '/api/classes', async (ctx) => {
   const subs = await repo.subjects.all();
+  const ids = await repo.classes.idsForUser(ctx.user);
+  const [byId, counts] = [await repo.classes.byIds(ids), await repo.classes.memberCounts(ids)];
   const rows = [];
-  for (const id of await repo.classes.idsForUser(ctx.user)) {
-    const c = await repo.classes.byId(id);
-    if (c) rows.push(await classView(c));
+  for (const id of ids) {
+    const c = byId.get(id);
+    if (c) rows.push({ id: c.id, name: c.name, inviteCode: c.inviteCode, teacherId: c.teacherId,
+      subject: subjectView(subs.find((x) => x.id === c.subjectId)), gradeBand: c.gradeBand, studentCount: counts.get(c.id) || 0 });
   }
   // 按科目、年级段排好，界面直接分组显示
   const sortOf = (r) => (subs.find((x) => r.subject && x.id === r.subject.id) || { sort: 99 }).sort;
@@ -181,6 +215,7 @@ on('POST', '/api/classes/join', async (ctx) => {
 }, { roles: ['student'] });
 
 on('GET', '/api/classes/:id/students', async (ctx) => {
+  if (!await canTouchClass(ctx.user, ctx.params.id)) return fail(ctx.res, 403, '看不了别的班的名单');
   ok(ctx.res, await repo.classes.members(ctx.params.id));
 });
 
@@ -214,16 +249,14 @@ on('GET', '/api/pages/:id', async (ctx) => {
   const lesson = await repo.lessons.byId(page.lessonId);
   const book = await repo.books.byId(lesson.bookId);
   // 整本书按「课顺序 + 页顺序」连续翻页，翻到一课的最后一页能接着翻到下一课
-  const siblings = [];
-  for (const l of await repo.lessons.byBook(lesson.bookId)) siblings.push(...await repo.pages.idsByLesson(l.id));
+  const siblings = await repo.pages.idsByBook(lesson.bookId);
   const idx = siblings.indexOf(page.id);
 
-  const hotspots = [];
-  for (const h of await repo.hotspots.byPage(page.id)) {
-    hotspots.push({ id: h.id, x: h.x, y: h.y, w: h.w, h: h.h,
-      startMs: h.startMs, endMs: h.endMs, en: h.en, cn: h.cn, type: h.type,
-      audio: await assetView(h.audioId) });
-  }
+  const rows = await repo.hotspots.byPage(page.id);
+  const audios = await assetMap(rows.map((h) => h.audioId));
+  const hotspots = rows.map((h) => ({ id: h.id, x: h.x, y: h.y, w: h.w, h: h.h,
+    startMs: h.startMs, endMs: h.endMs, en: h.en, cn: h.cn, type: h.type,
+    audio: audios.get(h.audioId) || null }));
   ok(ctx.res, {
     page: { id: page.id, pageNo: page.pageNo, imgW: page.imgW, imgH: page.imgH, img: await assetView(page.imgId) },
     lesson: { id: lesson.id, title: lesson.title, audio: await assetView(lesson.audioId) },
@@ -238,15 +271,14 @@ on('GET', '/api/pages/:id', async (ctx) => {
 on('GET', '/api/listening', async (ctx) => {
   const out = [];
   for (const b of await repo.books.listActive()) {
+    const rows = await repo.lessons.byBook(b.id);
+    const audios = await assetMap(rows.map((l) => l.audioId));
+    const counts = await repo.hotspots.listenCountsByBook(b.id);
     const lessons = [];
-    for (const l of await repo.lessons.byBook(b.id)) {
-      const audio = await assetView(l.audioId);
-      if (!audio) continue;
-      let count = 0;
-      for (const p of await repo.pages.byLesson(l.id)) {
-        count += (await repo.hotspots.byPage(p.id)).filter((h) => h.endMs > h.startMs).length;
-      }
-      if (count) lessons.push({ id: l.id, title: l.title, durationMs: audio.durationMs, sentenceCount: count });
+    for (const l of rows) {
+      const audio = audios.get(l.audioId);
+      const count = counts.get(l.id) || 0;
+      if (audio && count) lessons.push({ id: l.id, title: l.title, durationMs: audio.durationMs, sentenceCount: count });
     }
     if (lessons.length) out.push({ bookId: b.id, bookTitle: b.title, lessons });
   }
@@ -259,15 +291,8 @@ on('GET', '/api/lessons/:id/transcript', async (ctx) => {
   const audio = await assetView(lesson.audioId);
   if (!audio) return fail(ctx.res, 3010, '这一课还没有音频');
   const book = await repo.books.byId(lesson.bookId);
-  const sentences = [];
-  for (const p of await repo.pages.byLesson(lesson.id)) {
-    for (const h of await repo.hotspots.byPage(p.id)) {
-      if (h.endMs > h.startMs) {
-        sentences.push({ id: h.id, pageNo: p.pageNo, en: h.en, cn: h.cn, startMs: h.startMs, endMs: h.endMs });
-      }
-    }
-  }
-  sentences.sort((a, b) => a.startMs - b.startMs);
+  const sentences = (await repo.hotspots.byLessonTimeline(lesson.id))
+    .map((h) => ({ id: h.id, pageNo: h.pageNo, en: h.en, cn: h.cn, startMs: h.startMs, endMs: h.endMs }));
   ok(ctx.res, {
     lesson: { id: lesson.id, title: lesson.title, audio },
     book: { id: book.id, title: book.title },
@@ -332,6 +357,7 @@ on('POST', '/api/homeworks', async (ctx) => {
   const lesson = await repo.lessons.byId(page.lessonId);
   const cls = await repo.classes.byId(classId);
   if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  if (!await canTouchClass(ctx.user, cls.id)) return fail(ctx.res, 403, '只能给自己带的班布置作业');
   const subject = await repo.subjects.byId(cls.subjectId) || await repo.subjects.byCode('en');   // 作业科目跟班级走
   const hw = await repo.homeworks.create({
     classId, teacherId: ctx.user.id, title: String(title), type: 'follow_read',
@@ -340,17 +366,23 @@ on('POST', '/api/homeworks', async (ctx) => {
   ok(ctx.res, { id: hw.id });
 }, { roles: ['teacher', 'admin'] });
 
-async function hwBrief(hw, user) {
-  const cls = await repo.classes.byId(hw.classId);
-  const itemCount = hw.kind === 'questions' ? (await repo.questions.byHomework(hw.id)).length : hw.hotspotIds.length;
+/**
+ * 作业列表/详情共用的摘要。
+ * pre 是列表页预先批量查好的数据（班级、科目、题数、提交），传了就直接用，
+ * 不传（单份作业）才回退到单条查询。
+ */
+async function hwBrief(hw, user, pre) {
+  const cls = pre ? pre.classes.get(hw.classId) : await repo.classes.byId(hw.classId);
+  const itemCount = hw.kind !== 'questions' ? hw.hotspotIds.length
+    : (pre ? (pre.questionCounts.get(hw.id) || 0) : (await repo.questions.byHomework(hw.id)).length);
   const out = {
     id: hw.id, title: hw.title, className: cls ? cls.name : '', classId: hw.classId,
     pageId: hw.pageId, itemCount, note: hw.note,
     deadline: hw.deadline, createdAt: hw.createdAt,
-    kind: hw.kind, subject: subjectView(await repo.subjects.byId(hw.subjectId)),
+    kind: hw.kind, subject: subjectView(pre ? pre.subjects.get(hw.subjectId) : await repo.subjects.byId(hw.subjectId)),
   };
   if (user.role === 'student') {
-    const sub = await repo.submissions.byHomeworkAndStudent(hw.id, user.id);
+    const sub = pre ? pre.mySubs.get(hw.id) : await repo.submissions.byHomeworkAndStudent(hw.id, user.id);
     out.status = sub ? sub.status : 'todo';
     out.stars = sub ? sub.stars : null;
     out.reviewText = sub ? sub.reviewText : null;
@@ -358,12 +390,35 @@ async function hwBrief(hw, user) {
     out.score = sub ? sub.score : null;
     out.maxScore = sub ? sub.maxScore : null;
     out.excellent = sub ? sub.excellent : false;
+  } else if (pre) {
+    const st = pre.subStats.get(hw.id) || { submitted: 0, reviewed: 0 };
+    out.submitted = st.submitted;
+    out.reviewed = st.reviewed;
+    out.total = pre.memberCounts.get(hw.classId) || 0;
   } else {
     out.submitted = await repo.submissions.countByHomework(hw.id);
     out.reviewed = await repo.submissions.countReviewed(hw.id);
     out.total = await repo.classes.memberCount(hw.classId);
   }
   return out;
+}
+
+/** 作业列表用：班级、科目、题数、提交情况各查一次，避免每份作业都查五六次 */
+async function preloadForList(rows, user) {
+  const ids = rows.map((h) => h.id);
+  const classIds = [...new Set(rows.map((h) => h.classId))];
+  const pre = {
+    subjects: new Map((await repo.subjects.all()).map((x) => [x.id, x])),
+    classes: await repo.classes.byIds(classIds),
+    questionCounts: await repo.questions.countsByHomeworks(rows.filter((h) => h.kind === 'questions').map((h) => h.id)),
+    mySubs: new Map(), subStats: new Map(), memberCounts: new Map(),
+  };
+  if (user.role === 'student') pre.mySubs = await repo.submissions.byStudentForHomeworks(user.id, ids);
+  else {
+    pre.subStats = await repo.submissions.statsByHomeworks(ids);
+    pre.memberCounts = await repo.classes.memberCounts(classIds);
+  }
+  return pre;
 }
 
 on('GET', '/api/homeworks', async (ctx) => {
@@ -373,22 +428,23 @@ on('GET', '/api/homeworks', async (ctx) => {
     const sub = await repo.subjects.byCode(ctx.query.subject);
     rows = sub ? rows.filter((h) => h.subjectId === sub.id) : [];
   }
+  const pre = await preloadForList(rows, ctx.user);
   const out = [];
-  for (const hw of rows) out.push(await hwBrief(hw, ctx.user));
+  for (const hw of rows) out.push(await hwBrief(hw, ctx.user, pre));
   ok(ctx.res, out);
 });
 
 on('GET', '/api/homeworks/:id', async (ctx) => {
   const hw = await repo.homeworks.byId(ctx.params.id);
   if (!hw) return fail(ctx.res, 3004, '作业不存在');
+  if (!await canTouchClass(ctx.user, hw.classId)) return fail(ctx.res, 403, '这不是你班级的作业');
   if (hw.kind === 'questions') return ok(ctx.res, await questionHomeworkDetail(hw, ctx.user));
 
-  const items = [];
-  for (const hid of hw.hotspotIds) {
-    const h = await repo.hotspots.byId(hid);
-    if (!h) continue;
-    items.push({ hotspotId: h.id, en: h.en, cn: h.cn, startMs: h.startMs, endMs: h.endMs, audio: await assetView(h.audioId) });
-  }
+  const hsRows = [];
+  for (const hid of hw.hotspotIds) { const h = await repo.hotspots.byId(hid); if (h) hsRows.push(h); }
+  const hsAudio = await assetMap(hsRows.map((h) => h.audioId));
+  const items = hsRows.map((h) => ({ hotspotId: h.id, en: h.en, cn: h.cn, startMs: h.startMs, endMs: h.endMs,
+    audio: hsAudio.get(h.audioId) || null }));
 
   const page = await repo.pages.byId(hw.pageId);
   const lesson = page ? await repo.lessons.byId(page.lessonId) : null;
@@ -398,10 +454,9 @@ on('GET', '/api/homeworks/:id', async (ctx) => {
   if (ctx.user.role === 'student') {
     const sub = await repo.submissions.byHomeworkAndStudent(hw.id, ctx.user.id);
     if (sub) {
-      const subItems = [];
-      for (const it of await repo.submissionItems.bySubmission(sub.id)) {
-        subItems.push({ hotspotId: it.hotspotId, audio: await assetView(it.assetId) });
-      }
+      const its = await repo.submissionItems.bySubmission(sub.id);
+      const recs = await assetMap(its.map((it) => it.assetId));
+      const subItems = its.map((it) => ({ hotspotId: it.hotspotId, audio: recs.get(it.assetId) || null }));
       out.mySubmission = { id: sub.id, status: sub.status, stars: sub.stars,
         reviewText: sub.reviewText, submittedAt: sub.submittedAt, items: subItems };
     }
@@ -412,6 +467,7 @@ on('GET', '/api/homeworks/:id', async (ctx) => {
 on('POST', '/api/homeworks/:id/submit', async (ctx) => {
   const hw = await repo.homeworks.byId(ctx.params.id);
   if (!hw) return fail(ctx.res, 3004, '作业不存在');
+  if (!await canTouchClass(ctx.user, hw.classId)) return fail(ctx.res, 403, '这不是你班级的作业');
   const items = (Array.isArray(ctx.body.items) ? ctx.body.items : []).filter((it) => it && it.audioBase64);
   // 一段录音都没收到就拒绝，不能静默记成"已提交"（曾因字段名不一致丢过所有网页端录音）
   if (!items.length) return fail(ctx.res, 1001, '没有收到录音，请重新录一次再提交');
@@ -422,7 +478,9 @@ on('POST', '/api/homeworks/:id/submit', async (ctx) => {
     sub = await repo.submissions.create({ homeworkId: hw.id, studentId: ctx.user.id, elapsedSec: ctx.body.elapsedSec });
   } else {
     await repo.submissions.markResubmitted(sub.id, ctx.body.elapsedSec);
+    const old = await repo.submissionItems.bySubmission(sub.id);
     await repo.submissionItems.clear(sub.id);
+    await dropAssets(old.map((it) => it.assetId));
   }
   for (const it of items) {
     if (!it.audioBase64) continue;
@@ -446,30 +504,42 @@ on('DELETE', '/api/homeworks/:id', async (ctx) => {
 on('GET', '/api/homeworks/:id/submissions', async (ctx) => {
   const hw = await repo.homeworks.byId(ctx.params.id);
   if (!hw) return fail(ctx.res, 3004, '作业不存在');
+  if (!await canTouchClass(ctx.user, hw.classId)) return fail(ctx.res, 403, '这不是你带的班');
+  // 全班的提交、作答、资产各查一次，班级人数多时不会随人数一条条查
+  const members = await repo.classes.members(hw.classId);
+  const subsByStudent = await repo.submissions.byHomeworkForStudents(hw.id);
+  const subIds = [...subsByStudent.values()].map((s) => s.id);
+
   if (hw.kind === 'questions') {
     const qs = await repo.questions.byHomework(hw.id);
-    const questions = [];
-    for (const q of qs) questions.push({ id: q.id, sort: q.sort, type: q.type, stem: q.stem, stemImage: await assetView(q.stemImageId),
-      options: q.options, answer: q.answer, score: q.score, auto: grading.AUTO_TYPES.includes(q.type) });
+    const answersBySub = await repo.answers.bySubmissions(subIds);
+    const allAnswers = [...answersBySub.values()].flat();
+    const assets = await assetMap([...qs.map((q) => q.stemImageId), ...allAnswers.flatMap((a) => a.assetIds)]);
+    const questions = qs.map((q) => ({ id: q.id, sort: q.sort, type: q.type, stem: q.stem, stemImage: assets.get(q.stemImageId) || null,
+      options: q.options, answer: q.answer, score: q.score, auto: grading.AUTO_TYPES.includes(q.type) }));
     const rows = [];
-    for (const m of await repo.classes.members(hw.classId)) {
-      const sub = await repo.submissions.byHomeworkAndStudent(hw.id, m.id);
-      const answers = [];
-      if (sub) for (const a of await repo.answers.bySubmission(sub.id)) answers.push(await answerView(a));
+    for (const m of members) {
+      const sub = subsByStudent.get(m.id);
+      const answers = (sub ? answersBySub.get(sub.id) || [] : []).map((a) => answerView(a, assets));
       rows.push({ studentId: m.id, studentName: m.name, status: sub ? sub.status : 'todo', submissionId: sub ? sub.id : null,
         submittedAt: sub ? sub.submittedAt : null, score: sub ? sub.score : null, maxScore: sub ? sub.maxScore : null,
         stars: sub ? sub.stars : null, reviewText: sub ? sub.reviewText : null, excellent: sub ? sub.excellent : false, answers });
     }
     return ok(ctx.res, { homework: await hwBrief(hw, ctx.user), questions, rows });
   }
+
+  const hotspots = new Map();
+  for (const hid of hw.hotspotIds) { const h = await repo.hotspots.byId(hid); if (h) hotspots.set(h.id, h); }
   const rows = [];
-  for (const m of await repo.classes.members(hw.classId)) {
-    const sub = await repo.submissions.byHomeworkAndStudent(hw.id, m.id);
+  for (const m of members) {
+    const sub = subsByStudent.get(m.id);
     const items = [];
     if (sub) {
-      for (const it of await repo.submissionItems.bySubmission(sub.id)) {
-        const h = await repo.hotspots.byId(it.hotspotId);
-        items.push({ hotspotId: it.hotspotId, en: h ? h.en : '', cn: h ? h.cn : '', audio: await assetView(it.assetId) });
+      const its = await repo.submissionItems.bySubmission(sub.id);
+      const audios = await assetMap(its.map((it) => it.assetId));
+      for (const it of its) {
+        const h = hotspots.get(it.hotspotId);
+        items.push({ hotspotId: it.hotspotId, en: h ? h.en : '', cn: h ? h.cn : '', audio: audios.get(it.assetId) || null });
       }
     }
     rows.push({
@@ -489,6 +559,8 @@ on('GET', '/api/homeworks/:id/submissions', async (ctx) => {
 on('POST', '/api/submissions/:id/review', async (ctx) => {
   const sub = await repo.submissions.byId(ctx.params.id);
   if (!sub) return fail(ctx.res, 3006, '提交记录不存在');
+  const subHw = await repo.homeworks.byId(sub.homeworkId);
+  if (!subHw || !await canTouchClass(ctx.user, subHw.classId)) return fail(ctx.res, 403, '这不是你带的班');
   const stars = Math.max(1, Math.min(5, Number(ctx.body.stars) || 5));
   const first = sub.status !== 'reviewed';
   await repo.submissions.review(sub.id, { stars, reviewText: String(ctx.body.reviewText || '') });
@@ -500,6 +572,8 @@ on('POST', '/api/submissions/:id/review', async (ctx) => {
 on('POST', '/api/submissions/:id/reject', async (ctx) => {
   const sub = await repo.submissions.byId(ctx.params.id);
   if (!sub) return fail(ctx.res, 3006, '提交记录不存在');
+  const subHw = await repo.homeworks.byId(sub.homeworkId);
+  if (!subHw || !await canTouchClass(ctx.user, subHw.classId)) return fail(ctx.res, 403, '这不是你带的班');
   await repo.submissions.reject(sub.id, String(ctx.body.reviewText || '请重新录一次'));
   ok(ctx.res, { ok: true });
 }, { roles: ['teacher', 'admin'] });
@@ -612,6 +686,7 @@ on('POST', '/api/homeworks/questions', async (ctx) => {
   if (!classId || !String(title || '').trim()) return fail(ctx.res, 1001, '请选择班级并填写作业标题');
   const cls = await repo.classes.byId(classId);
   if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  if (!await canTouchClass(ctx.user, cls.id)) return fail(ctx.res, 403, '只能给自己带的班布置作业');
   const subject = await repo.subjects.byId(cls.subjectId) || await repo.subjects.byId(subjectId);   // 作业科目跟班级走
   if (!subject) return fail(ctx.res, 1001, '这个班还没设置科目');
   if (!list.length) return fail(ctx.res, 1001, '至少出一道题');
@@ -626,7 +701,7 @@ on('POST', '/api/homeworks/questions', async (ctx) => {
     if (x.stemImageBase64) {
       const img = decodeImage(x.stemImageBase64, 5 * 1024 * 1024);
       if (img.error) return fail(ctx.res, 1001, `第 ${i + 1} 题图片：${img.error}`);
-      const { asset } = await putAsset('stem', img.buf.toString('base64'), img.ext, { durationMs: 0, mime: 'image/' + img.ext });
+      const { asset } = await putAssetBuf('stem', img.buf, img.ext, { mime: 'image/' + img.ext });
       stemImageId = asset.id;
     }
     const answer = x.type === 'single' ? Number(x.answer)
@@ -643,9 +718,8 @@ on('POST', '/api/homeworks/questions', async (ctx) => {
   ok(ctx.res, { id: hw.id });
 }, { roles: ['teacher', 'admin'] });
 
-async function answerView(a) {
-  const assets = [];
-  for (const id of a.assetIds) { const v = await assetView(id); if (v) assets.push(v); }
+function answerView(a, assetsById) {
+  const assets = a.assetIds.map((id) => assetsById.get(id)).filter(Boolean);
   return { id: a.id, questionId: a.questionId, value: a.value, assets, autoCorrect: a.autoCorrect, score: a.score, comment: a.comment };
 }
 
@@ -659,13 +733,14 @@ async function questionHomeworkDetail(hw, user) {
     if (sub) answers = await repo.answers.bySubmission(sub.id);
   }
   const reveal = user.role !== 'student' || (sub && sub.status === 'reviewed');
+  const assets = await assetMap([...qs.map((q) => q.stemImageId), ...answers.flatMap((a) => a.assetIds)]);
   for (const q of qs) {
-    const view = { id: q.id, type: q.type, stem: q.stem, stemImage: await assetView(q.stemImageId),
+    const view = { id: q.id, type: q.type, stem: q.stem, stemImage: assets.get(q.stemImageId) || null,
       options: q.options, score: q.score, auto: grading.AUTO_TYPES.includes(q.type) };
     if (q.type === 'blank') view.blankCount = (q.answer && q.answer.blanks || []).length;
     if (reveal) { view.answer = q.answer; view.analysis = q.analysis; }
     const a = answers.find((x) => x.questionId === q.id);
-    if (a) view.myAnswer = await answerView(a);
+    if (a) view.myAnswer = answerView(a, assets);
     out.questions.push(view);
   }
   if (sub) out.mySubmission = { id: sub.id, status: sub.status, score: sub.score, maxScore: sub.maxScore, stars: sub.stars,
@@ -684,6 +759,7 @@ on('POST', '/api/homeworks/:id/answers', async (ctx) => {
   const qs = await repo.questions.byHomework(hw.id);
   const given = Array.isArray(ctx.body.answers) ? ctx.body.answers : [];
   const byQ = new Map(given.map((a) => [Number(a.questionId), a]));
+  const photos = new Map();                // questionId -> 解码后的照片
 
   // 先校验：需要老师批改的题必须真的交了东西，避免"提交成功"却什么都没收到
   for (const [i, q] of qs.entries()) {
@@ -692,11 +768,23 @@ on('POST', '/api/homeworks/:id/answers', async (ctx) => {
     if (q.type === 'audio' && !a.audioBase64) return fail(ctx.res, 1001, `第 ${i + 1} 题还没有录音`);
     if (q.type === 'text' && !String(a.value || '').trim()) return fail(ctx.res, 1001, `第 ${i + 1} 题还没有作答`);
     if (q.type === 'photo' && a.photos.length > 6) return fail(ctx.res, 1001, `第 ${i + 1} 题最多 6 张照片`);
-    if (q.type === 'photo') for (const ph of a.photos) { const d = decodeImage(ph); if (d.error) return fail(ctx.res, 1001, `第 ${i + 1} 题照片：${d.error}`); }
+    if (q.type === 'photo') {
+      const imgs = [];
+      for (const ph of a.photos) {
+        const d = decodeImage(ph);
+        if (d.error) return fail(ctx.res, 1001, `第 ${i + 1} 题照片：${d.error}`);
+        imgs.push(d);                      // 解码一次留着用，后面不再从 base64 解第二遍
+      }
+      photos.set(q.id, imgs);
+    }
   }
 
+  let oldAssetIds = [];
   if (!sub) sub = await repo.submissions.create({ homeworkId: hw.id, studentId: ctx.user.id, elapsedSec: ctx.body.elapsedSec });
-  else await repo.submissions.markResubmitted(sub.id, ctx.body.elapsedSec);
+  else {
+    await repo.submissions.markResubmitted(sub.id, ctx.body.elapsedSec);
+    oldAssetIds = (await repo.answers.bySubmission(sub.id)).flatMap((x) => x.assetIds);
+  }
 
   const rows = [];
   let score = 0, maxScore = 0, manual = 0;
@@ -713,9 +801,8 @@ on('POST', '/api/homeworks/:id/answers', async (ctx) => {
       manual++;
       if (q.type === 'text') row.value = String(a.value).slice(0, 5000);
       if (q.type === 'photo') {
-        for (const ph of a.photos) {
-          const d = decodeImage(ph);
-          const { asset } = await putAsset('photo', d.buf.toString('base64'), d.ext, { durationMs: 0, mime: 'image/' + d.ext });
+        for (const d of photos.get(q.id) || []) {
+          const { asset } = await putAssetBuf('photo', d.buf, d.ext, { mime: 'image/' + d.ext });
           row.assetIds.push(asset.id);
         }
       }
@@ -728,6 +815,7 @@ on('POST', '/api/homeworks/:id/answers', async (ctx) => {
     results.push({ questionId: q.id, correct: row.autoCorrect, score: row.score });
   }
   await repo.answers.replaceAll(sub.id, rows);
+  await dropAssets(oldAssetIds);           // 重交后旧照片、旧录音不再留在磁盘上
 
   // 全是客观题：系统直接批改完成；有主观题：等老师
   const allAuto = manual === 0;
@@ -742,7 +830,8 @@ on('POST', '/api/submissions/:id/grade', async (ctx) => {
   const sub = await repo.submissions.byId(ctx.params.id);
   if (!sub) return fail(ctx.res, 3006, '提交记录不存在');
   const hw = await repo.homeworks.byId(sub.homeworkId);
-  if (!hw || hw.kind !== 'questions') return fail(ctx.res, 1001, '这不是题目作业');
+  if (!hw || !await canTouchClass(ctx.user, hw.classId)) return fail(ctx.res, 403, '这不是你带的班');
+  if (hw.kind !== 'questions') return fail(ctx.res, 1001, '这不是题目作业');
   const qs = await repo.questions.byHomework(hw.id);
   const ans = await repo.answers.bySubmission(sub.id);
   const given = new Map((Array.isArray(ctx.body.scores) ? ctx.body.scores : []).map((x) => [Number(x.answerId), x]));
@@ -833,6 +922,8 @@ on('POST', '/api/public/leads', async (ctx) => {
 
   const ip = String(ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '').split(',')[0].trim();
   const nowMs = Date.now();
+  // 顺手清掉过期的 IP，免得这张表一直涨
+  for (const [k, v] of leadHits) if (!v.some((t) => nowMs - t < 3600e3)) leadHits.delete(k);
   const hits = (leadHits.get(ip) || []).filter((t) => nowMs - t < 3600e3);
   if (hits.length >= 5) return fail(ctx.res, 429, '提交太频繁了，请稍后再试');
   hits.push(nowMs); leadHits.set(ip, hits);

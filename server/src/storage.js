@@ -24,6 +24,15 @@ async function save(kind, base64, ext) {
   return { relPath, size: buf.length };
 }
 
+/** 保存已经解码好的二进制内容（省掉一次 base64 往返） */
+async function saveBuf(kind, buf, ext) {
+  if (!buf || !buf.length) throw new Error('文件内容为空');
+  const name = `${Date.now()}_${rid().slice(0, 8)}.${(ext || 'bin').replace(/[^a-z0-9]/gi, '')}`;
+  const relPath = path.posix.join(DIR_OF[kind] || 'rec', name);
+  fs.writeFileSync(path.join(CONTENT_DIR, relPath), buf);
+  return { relPath, size: buf.length };
+}
+
 /** 按指定路径保存（覆盖同名文件），用于每人只保留一份的内容，比如学习海报 */
 async function saveAs(relPath, buf) {
   fs.mkdirSync(path.dirname(path.join(CONTENT_DIR, relPath)), { recursive: true });
@@ -60,4 +69,4 @@ async function remove(relPath) {
   try { fs.unlinkSync(path.join(CONTENT_DIR, relPath)); } catch (e) {}
 }
 
-module.exports = { save, saveAs, remove, urlOf, probeDurationMs, imageSize };
+module.exports = { save, saveBuf, saveAs, remove, urlOf, probeDurationMs, imageSize };

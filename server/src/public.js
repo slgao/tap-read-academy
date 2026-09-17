@@ -123,8 +123,8 @@ async function sharePage(req, res, url, token) {
   }
   const subject = share.subjectId ? await repo.subjects.byId(share.subjectId) : null;
   const img = store.urlOf(share.imagePath);
-  const photos = [];
-  for (const id of share.photoIds) { const a = await repo.assets.byId(id); if (a) photos.push(store.urlOf(a.relPath)); }
+  const assets = await repo.assets.byIds(share.photoIds);
+  const photos = share.photoIds.map((id) => assets.get(Number(id))).filter(Boolean).map((a) => store.urlOf(a.relPath));
 
   const isWork = share.type === 'work';
   const desc = share.comment ? `老师评语：${share.comment}` : (isWork ? '来看看孩子的书法作品' : '孩子的作业被评为优秀');
@@ -153,11 +153,12 @@ async function sharePage(req, res, url, token) {
 
 async function galleryPage(req, res) {
   const calli = await repo.subjects.byCode('calli');
+  // 「在分享中 + 被评为优秀」由一条 SQL 过滤，图片一次取完
+  const rows = calli ? await repo.shares.galleryRows(calli.id) : [];
+  const assets = await repo.assets.byIds(rows.map((s) => s.photoIds[0]));
   const works = [];
-  for (const s of calli ? await repo.shares.gallery(calli.id) : []) {
-    const sub = s.submissionId ? await repo.submissions.byId(s.submissionId) : null;
-    if (!sub || !sub.excellent) continue;                  // 作品展只展示老师评为优秀的
-    const a = s.photoIds.length ? await repo.assets.byId(s.photoIds[0]) : null;
+  for (const s of rows) {
+    const a = assets.get(Number(s.photoIds[0]));
     if (!a) continue;
     works.push({ token: s.token, title: s.title, photo: store.urlOf(a.relPath), comment: s.comment });
   }

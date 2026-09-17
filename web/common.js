@@ -182,6 +182,12 @@
       this.mr.start();
       this.startAt = Date.now();
     },
+    /** 放弃这次录音，并把麦克风放掉（离开页面时用，否则手机上会一直显示正在录音） */
+    cancel() {
+      try { if (this.mr && this.mr.state !== 'inactive') { this.mr.onstop = null; this.mr.stop(); } } catch (e) {}
+      try { if (this.stream) this.stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+      this.mr = null; this.chunks = []; this.stream = null;
+    },
     stop() {
       return new Promise((resolve, reject) => {
         if (!this.mr) return reject(new Error('未在录音'));
@@ -190,6 +196,7 @@
           const blob = new Blob(this.chunks, { type });
           this.stream.getTracks().forEach((t) => t.stop());
           const durationMs = Date.now() - this.startAt;
+          this.stream = null;
           const ext = type.includes('mp4') || type.includes('aac') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
           const base64 = await new Promise((r) => {
             const fr = new FileReader();

@@ -206,6 +206,15 @@ const TAG = '__e2e_' + Date.now();
   const other = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TAG + '赵老师', teacherCode: process.env.TEACHER_CODE || '' });
   const otherDel = await expectFail('DELETE', `/api/homeworks/${qhw.id}`, null, other.token);
   check('别的老师不能删这个班的作业', /只能删除自己班/.test(otherDel || ''), otherDel);
+  const otherSee = await expectFail('GET', `/api/homeworks/${qhw.id}/submissions`, null, other.token);
+  check('别的老师看不到这个班的批改页', /不是你带的班/.test(otherSee || ''), otherSee);
+  const otherGrade = await expectFail('POST', `/api/submissions/${1}/grade`, { scores: [] }, other.token);
+  check('别的老师不能打分', /不是你带的班|提交记录不存在/.test(otherGrade || ''), otherGrade);
+  const otherRoster = await expectFail('GET', `/api/classes/${mathCls.id}/students`, null, other.token);
+  check('别的老师看不到这个班的名单', /别的班/.test(otherRoster || ''), otherRoster);
+  const otherPost = await expectFail('POST', '/api/homeworks/questions', { classId: mathCls.id, title: TAG + ' 蹭班',
+    questions: [{ type: 'judge', score: 1, stem: 'x', answer: true }] }, other.token);
+  check('别的老师不能给这个班布置作业', /自己带的班/.test(otherPost || ''), otherPost);
   const delHw = await expectFail('DELETE', `/api/classes/${mathCls.id}`, null, T.token);
   check('布置过作业的班不能删', /不能删除/.test(delHw || ''), delHw);
 
