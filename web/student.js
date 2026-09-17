@@ -80,9 +80,12 @@
       const s = pending; pending = 0;
       try {
         const r = await API.post('/api/study/heartbeat', { seconds: s });
-        // 只在首页重画：正在做作业时重画会把还没提交的答案清掉
-        if (r.justChecked) celebrate({ mark: '读', label: '今日已打卡', title: '今天的印盖上啦', sub: `已经连续打卡 ${r.streak} 天`, gain: 0 });
-        if (S.view === 'home') render();            // 停在首页时圆盘跟着一起走
+        // 打卡成功：在首页盖个印庆祝一下；正在读课文、做作业时只轻提示一句，不挡住屏幕
+        if (r.justChecked) {
+          if (S.view === 'home') celebrate({ mark: '读', label: '今日已打卡', title: '今天的印盖上啦', sub: `已经连续打卡 ${r.streak} 天`, gain: 0 });
+          else toast(`今天的打卡印盖上啦，连续 ${r.streak} 天`, 2600);
+        }
+        if (S.view === 'home') render();            // 停在首页时圆盘跟着一起走（重画会清掉没提交的答案，所以别的页面不重画）
       } catch {}
     }
   }, 5000);
