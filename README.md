@@ -21,6 +21,10 @@
 
 ---
 
+> **品牌素材不在仓库里。** 校徽放在 `web/brand/`（`logo-96.png`、`logo-192.png`、`logo-512.png`、`favicon-48.png`，
+> 透明底、单色 `#2B1A6E`），小程序在 `miniprogram/images/logo.png`，体验版在 `static-demo/public/brand/`。
+> 这几个目录已加入 `.gitignore`，克隆下来后需要自己放入，否则页面上的校徽位置是空的。
+
 ## 一、跑起来（30 秒）
 
 ```bash

@@ -50,12 +50,41 @@
   const fmtDate = (s) => (s || '').slice(5, 16);
   const starStr = (n) => '★'.repeat(n || 0) + '<span class="off">' + '★'.repeat(5 - (n || 0)) + '</span>';
 
+  const PLAYERS = [];
+
+  /* ---------------- 录音试听 ----------------
+   * 全局只有一个，避免连点"听"按钮时多个录音叠在一起重复播放。
+   * 再点正在播放的同一段 = 停止；点另一段 = 先停旧的再放新的。
+   */
+  const Clip = {
+    el: null, url: null, btn: null,
+    playing(url) { return !!(this.el && !this.el.paused && this.url === url); },
+    play(url, btn) {
+      if (!url) return;
+      if (this.playing(url)) { this.stop(); return; }
+      this.stop();
+      PLAYERS.forEach((p) => p.stop());   // 和课文播放互斥
+      const el = new Audio(url);
+      this.el = el; this.url = url; this.btn = btn || null;
+      if (this.btn) this.btn.classList.add('is-playing');
+      el.onended = () => { if (this.el === el) this.stop(); };
+      el.onerror = () => { if (this.el === el) { this.stop(); toast('录音播放失败'); } };
+      el.play().catch(() => { if (this.el === el) this.stop(); });
+    },
+    stop() {
+      if (this.el) { try { this.el.pause(); this.el.src = ''; } catch (e) {} }
+      if (this.btn) this.btn.classList.remove('is-playing');
+      this.el = null; this.url = null; this.btn = null;
+    },
+  };
+
   /* ---------------- 播放器 ----------------
    * mode='tts'   浏览器语音合成朗读英文（Demo 默认；占位音轨听不出内容）
    * mode='audio' 播放真实音频文件，按 startMs~endMs 精确 seek —— 这是小程序端的真实逻辑
    */
   class Player {
     constructor() {
+      PLAYERS.push(this);
       this.el = new Audio();
       this.el.preload = 'auto';
       this.mode = 'tts';
@@ -86,6 +115,7 @@
 
     /** hs: {id,en,startMs,endMs,audio:{url,placeholder}} */
     play(hs, onEnd) {
+      Clip.stop();                      // 放课文时先停掉正在放的录音
       this._clear();
       this._onEnd = onEnd || null;
       this.current = hs;
@@ -143,6 +173,8 @@
     supported() { return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && global.MediaRecorder); },
     async start() {
       if (!this.supported()) throw new Error('当前浏览器不支持录音（需 localhost 或 https）');
+      Clip.stop();
+      PLAYERS.forEach((p) => p.stop());
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       this.chunks = [];
       this.mr = new MediaRecorder(this.stream);
@@ -179,5 +211,8 @@
     fr.readAsDataURL(file);
   });
 
-  global.App = { Store, API, toast, esc, fmtDate, starStr, Player, Rec, fileToBase64 };
+  /** 其他播放器（如听力模式）登记进来，和课文、录音互相停止 */
+  const registerPlayer = (p) => { PLAYERS.push(p); };
+
+  global.App = { Store, API, toast, esc, fmtDate, starStr, Player, Rec, Clip, fileToBase64, registerPlayer };
 })(window);

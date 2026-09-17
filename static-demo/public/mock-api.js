@@ -106,6 +106,27 @@
         hotspots: e.page.hotspots.map((h) => Object.assign({}, h, { type: 'sentence', audio })),
       };
     }],
+    ['GET', /^\/api\/listening$/, () => C.books.map((b) => ({
+      bookId: b.id, bookTitle: b.title,
+      lessons: b.lessons.filter((l) => l.audio).map((l) => ({
+        id: l.id, title: l.title, durationMs: l.audio.durationMs,
+        sentenceCount: l.pages.reduce((n, pg) => n + pg.hotspots.filter((h) => h.endMs > h.startMs).length, 0),
+      })).filter((l) => l.sentenceCount),
+    })).filter((b) => b.lessons.length)],
+    ['GET', /^\/api\/lessons\/(\d+)\/transcript$/, (m) => {
+      for (const b of C.books) {
+        const l = b.lessons.find((x) => x.id === Number(m[1]));
+        if (!l) continue;
+        if (!l.audio) throw new Error('这一课还没有音频');
+        const sentences = [];
+        l.pages.forEach((pg) => pg.hotspots.forEach((h) => {
+          if (h.endMs > h.startMs) sentences.push({ id: h.id, pageNo: pg.pageNo, en: h.en, cn: h.cn, startMs: h.startMs, endMs: h.endMs });
+        }));
+        sentences.sort((a, c) => a.startMs - c.startMs);
+        return { lesson: { id: l.id, title: l.title, audio: audioOf(l) }, book: { id: b.id, title: b.title }, sentences };
+      }
+      throw new Error('课不存在');
+    }],
     ['POST', /^\/api\/study\/heartbeat$/, (m, body) => {
       const s = state(); const d = today();
       s.days[d] = (s.days[d] || 0) + (Number(body.seconds) || 0);

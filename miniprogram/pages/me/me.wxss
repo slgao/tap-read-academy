@@ -1,4 +1,5 @@
-.cal { display:flex; flex-wrap:wrap; margin-top:16rpx; }
-.cell { width:84rpx; height:84rpx; margin:6rpx; border-radius:14rpx; background:#EEF2F6; color:#94A3B8;
-  font-size:22rpx; display:flex; align-items:center; justify-content:center; }
-.cell.on { background:#F59E0B; color:#fff; font-weight:700; }
+.cal { display: flex; flex-wrap: wrap; margin-top: 20rpx; }
+.cell { width: 72rpx; height: 72rpx; margin: 8rpx; border-radius: 50%; border: 2rpx dashed var(--wash-2);
+  color: var(--text-3); font-size: 22rpx; display: flex; align-items: center; justify-content: center; }
+.cell.on { border: 4rpx solid var(--ink); color: var(--ink); font-weight: 700; transform: rotate(-8deg);
+  font-family: "Songti SC", "Noto Serif SC", "STSong", serif; }

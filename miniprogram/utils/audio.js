@@ -28,6 +28,7 @@ function stop() { state.onEnd = null; state.stopped = true; clear(); try { ctx.p
 
 /** hs: { audioUrl, startMs, endMs } */
 function playSegment(hs, onEnd) {
+  require('./clip').stop();           // 放课文时先停掉正在放的录音
   clear();
   state.onEnd = onEnd || null;
   state.stopped = false;

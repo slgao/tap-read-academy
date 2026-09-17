@@ -88,6 +88,15 @@ const TAG = '__e2e_' + Date.now();
     && resaved.hotspots[0].cn.endsWith('(改过)'),
     'id ' + idsBefore.join(',') + ' 不变');
 
+  log('\n[3b] 听力');
+  const listen = await call('GET', '/api/listening', null, T.token);
+  const lb = listen.find((x) => x.bookId === book.id);
+  check('听力列表包含有音频的课', !!lb && lb.lessons[0].id === lesson.id && lb.lessons[0].sentenceCount === 2,
+    lb ? `${lb.lessons[0].title} ${lb.lessons[0].sentenceCount} 句` : '没找到');
+  const tr = await call('GET', `/api/lessons/${lesson.id}/transcript`, null, T.token);
+  check('整课时间轴按时间排序', tr.sentences.length === 2 && tr.sentences[0].startMs < tr.sentences[1].startMs
+    && tr.lesson.audio.url === aud.asset.url, tr.sentences.map((x) => `${x.en}@${x.startMs}`).join(' / '));
+
   log('\n[4] 作业：布置 → 提交 → 批改');
   const hw = await call('POST', '/api/homeworks', {
     classId: cls.id, pageId: page.id, title: TAG + ' 作业',

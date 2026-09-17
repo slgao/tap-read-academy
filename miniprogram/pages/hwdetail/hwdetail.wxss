@@ -1,0 +1,2 @@
+.sentence { font-size: 34rpx; color: var(--ink-deep); line-height: 1.45; }
+.stars { color: var(--ink); letter-spacing: 4rpx; }

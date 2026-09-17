@@ -2,11 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="description" content="英语教材点读 + 作业跟读打卡，体验版">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>点读学堂 · 体验版</title>
+<title>福斯特培训学校 · 点读体验</title>
+<meta name="description" content="福斯特培训学校：教材点读、跟读作业、每日打卡">
 <link rel="stylesheet" href="styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230EA5E9'/><text x='16' y='23' font-size='17' font-family='sans-serif' text-anchor='middle' fill='white'>读</text></svg>">
+<link rel="icon" type="image/png" href="brand/favicon-48.png">
+<meta name="theme-color" content="#FFFFFF">
 </head>
 <body>
 <div id="app">
@@ -15,7 +16,8 @@
   <div class="tabbar" id="tabbar" hidden></div>
 </div>
 <div id="toast"></div>
-<script>window.APP_KEY='student'</script>
+<script>window.APP_KEY='student';window.DEMO_MODE=true</script>
+<script src="vendor/qrcode.js"></script>
 <script src="common.js"></script>
 <script src="mock-api.js"></script>
 <script src="student.js"></script>

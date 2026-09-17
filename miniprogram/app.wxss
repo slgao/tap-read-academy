@@ -1,25 +1,52 @@
-page { background: #F5F7FA; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  color: #0F172A; font-size: 30rpx; }
-.card { background: #fff; border-radius: 24rpx; padding: 28rpx; margin: 0 24rpx 20rpx;
-  box-shadow: 0 2rpx 16rpx rgba(15,23,42,.05); }
+/* 福斯特培训学校 · 取自校徽：单色院墨 + 纸白，细线与留白；标题用宋体呼应校徽书法字 */
+page {
+  --ink: #2B1A6E; --ink-deep: #1C1147; --wash: #F3F1F9; --wash-2: #E9E5F4; --line: #E6E3EF;
+  --text: #1E1B2E; --text-2: #6E6A80; --text-3: #A8A4B8; --danger: #B42318;
+  background: #FFFFFF; color: var(--text); font-size: 30rpx; line-height: 1.6;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+.serif { font-family: "Songti SC", "Noto Serif SC", "STSong", serif; }
+.en { font-family: Georgia, "Times New Roman", serif; }
+.card { background: #fff; border: 2rpx solid var(--line); border-radius: 28rpx; padding: 30rpx; margin: 0 32rpx 24rpx; }
 .row { display: flex; align-items: center; }
 .between { justify-content: space-between; }
 .grow { flex: 1; min-width: 0; }
-.muted { color: #94A3B8; font-size: 24rpx; }
-.small { font-size: 24rpx; }
+.muted { color: var(--text-2); font-size: 26rpx; }
+.small { font-size: 25rpx; }
 .strong { font-weight: 600; }
 .ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mt { margin-top: 20rpx; }
-.btn { background: #0EA5E9; color: #fff; border-radius: 20rpx; font-size: 30rpx; font-weight: 600;
-  padding: 22rpx; text-align: center; line-height: 1.2; }
-.btn.ghost { background: #E0F2FE; color: #0284C7; }
-.btn.grey { background: #EEF2F6; color: #475569; }
-.btn.sm { padding: 12rpx 22rpx; font-size: 26rpx; border-radius: 16rpx; display: inline-block; }
-.pill { display: inline-block; font-size: 22rpx; padding: 4rpx 16rpx; border-radius: 999rpx;
-  background: #EEF2F6; color: #475569; font-weight: 600; }
-.pill.ok { background: #DCFCE7; color: #15803D; }
-.pill.warn { background: #FEF3C7; color: #B45309; }
-.pill.todo { background: #FEE2E2; color: #B91C1C; }
-.hero { margin: 24rpx; padding: 34rpx; border-radius: 28rpx; color: #fff;
-  background: linear-gradient(140deg, #0EA5E9, #38BDF8); }
-.empty { text-align: center; color: #94A3B8; padding: 120rpx 40rpx; font-size: 26rpx; }
+.section-title { font-family: "Songti SC", "Noto Serif SC", "STSong", serif; font-size: 31rpx; font-weight: 700; color: var(--ink-deep); }
+
+.btn { background: var(--ink); color: #fff; border: 2rpx solid var(--ink); border-radius: 20rpx;
+  font-size: 30rpx; font-weight: 600; padding: 22rpx; text-align: center; line-height: 1.2; }
+.btn.ghost, .btn.grey { background: #fff; color: var(--ink); border-color: var(--line); }
+.btn.grey { color: var(--text-2); }
+.btn.sm { padding: 12rpx 24rpx; font-size: 26rpx; border-radius: 16rpx; display: inline-block; }
+.btn.playing { background: var(--ink); color: #fff; border-color: var(--ink); }
+.button-hover { opacity: .85; }
+
+.pill { display: inline-block; font-size: 23rpx; padding: 2rpx 18rpx; border-radius: 999rpx;
+  border: 2rpx solid var(--line); color: var(--text-2); }
+.pill.todo { border-color: var(--ink); color: var(--ink); }
+.pill.ok { background: var(--wash); border-color: var(--wash); color: var(--ink); }
+.pill.warn { color: var(--text-2); }
+
+.hero { margin: 8rpx 32rpx 32rpx; padding: 16rpx 4rpx 36rpx; border-bottom: 2rpx solid var(--line); }
+.hero .title { font-family: "Songti SC", "Noto Serif SC", "STSong", serif; font-size: 46rpx; font-weight: 700; color: var(--ink-deep); }
+.stats { display: flex; margin-top: 30rpx; }
+.stats .stat { flex: 1; padding-left: 24rpx; border-left: 2rpx solid var(--line); }
+.stats .stat:first-child { padding-left: 0; border-left: 0; }
+.stats .num { font-size: 42rpx; font-weight: 600; color: var(--ink); line-height: 1.2; }
+.stats .lbl { font-size: 23rpx; color: var(--text-3); }
+
+/* 打卡印章：唯一的装饰 */
+.seal-row { display: flex; justify-content: space-between; margin-top: 24rpx; }
+.seal-cell { display: flex; flex-direction: column; align-items: center; font-size: 22rpx; color: var(--text-3); }
+.seal { width: 68rpx; height: 68rpx; border-radius: 50%; border: 2rpx dashed var(--wash-2); margin-bottom: 6rpx;
+  display: flex; align-items: center; justify-content: center; font-size: 24rpx; font-weight: 700; color: transparent;
+  font-family: "Songti SC", "Noto Serif SC", "STSong", serif; }
+.seal.today { border-style: solid; border-color: var(--text-3); }
+.seal.on { border: 4rpx solid var(--ink); color: var(--ink); transform: rotate(-8deg); }
+
+.empty { text-align: center; color: var(--text-3); padding: 120rpx 40rpx; font-size: 26rpx; }

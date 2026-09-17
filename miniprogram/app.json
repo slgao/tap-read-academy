@@ -9,20 +9,30 @@
     "pages/me/me"
   ],
   "window": {
-    "navigationBarBackgroundColor": "#0EA5E9",
-    "navigationBarTextStyle": "white",
-    "navigationBarTitleText": "点读学堂",
-    "backgroundColor": "#F5F7FA"
+    "navigationBarBackgroundColor": "#FFFFFF",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "福斯特培训学校",
+    "backgroundColor": "#FFFFFF"
   },
   "tabBar": {
-    "color": "#94A3B8",
-    "selectedColor": "#0EA5E9",
-    "backgroundColor": "#ffffff",
+    "color": "#A8A4B8",
+    "selectedColor": "#2B1A6E",
+    "backgroundColor": "#FFFFFF",
     "list": [
-      { "pagePath": "pages/index/index", "text": "首页" },
-      { "pagePath": "pages/hwlist/hwlist", "text": "作业" },
-      { "pagePath": "pages/me/me", "text": "我的" }
-    ]
+      {
+        "pagePath": "pages/index/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/hwlist/hwlist",
+        "text": "作业"
+      },
+      {
+        "pagePath": "pages/me/me",
+        "text": "我的"
+      }
+    ],
+    "borderStyle": "black"
   },
   "style": "v2",
   "sitemapLocation": "sitemap.json"

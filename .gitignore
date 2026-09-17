@@ -13,3 +13,8 @@ static-demo/public/assets/
 # 部署配置（含服务器地址）和本地备份不入库
 deploy/deploy.env
 deploy/backups/
+
+# 机构校徽等品牌素材（客户资产，不进公开仓库）
+web/brand/
+static-demo/public/brand/
+miniprogram/images/logo.png

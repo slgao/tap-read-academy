@@ -1,17 +1,24 @@
 <view class="hero">
-  <view style="font-size:38rpx;font-weight:600">你好，{{user.name}}</view>
-<view class="small" style="opacity:.9">{{sum.checkedInToday ?'今天已打卡，继续保持' :'今天还没打卡，读 1 分钟就能打卡'}}</view>
-  <view class="row" style="margin-top:28rpx">
-    <view style="margin-right:48rpx"><view style="font-size:44rpx;font-weight:700">{{sum.streak}}</view><view style="font-size:22rpx;opacity:.85">连续打卡(天)</view></view>
-    <view style="margin-right:48rpx"><view style="font-size:44rpx;font-weight:700">{{sum.stars}}</view><view style="font-size:22rpx;opacity:.85">累计星星</view></view>
-    <view><view style="font-size:44rpx;font-weight:700">{{todayMin}}</view><view style="font-size:22rpx;opacity:.85">今日(分钟)</view></view>
+  <view class="title">{{greeting}}，{{user.name}}</view>
+  <view class="muted small">{{sum.checkedInToday ? '今天的印已经盖上了' : '今天读满 ' + needMin + ' 分钟，就能盖上今天的印'}}</view>
+  <view class="seal-row">
+    <view wx:for="{{seals}}" wx:key="key" class="seal-cell">
+      <view class="seal {{item.on ? 'on' : ''}} {{item.today ? 'today' : ''}}">{{item.on ? '读' : ''}}</view>
+      <text>{{item.label}}</text>
+    </view>
+  </view>
+  <view class="stats">
+    <view class="stat"><view class="num">{{sum.streak}}</view><view class="lbl">连续打卡天数</view></view>
+    <view class="stat"><view class="num">{{sum.stars}}</view><view class="lbl">星星</view></view>
+    <view class="stat"><view class="num">{{todayMin}}</view><view class="lbl">今天读了几分钟</view></view>
   </view>
 </view>
 
 <view class="card">
-  <view class="row between"><text class="strong">今日作业</text>
+  <view class="row between"><text class="section-title">今日作业</text>
     <text class="pill {{todo.length ? 'todo' : 'ok'}}">{{todo.length ? todo.length + ' 项待完成' : '全部完成'}}</text></view>
   <view wx:for="{{todo}}" wx:key="id" class="row item" bindtap="openHw" data-id="{{item.id}}">
+    <view class="num-dot">{{index + 1}}</view>
     <view class="grow"><view class="strong ellip">{{item.title}}</view>
       <view class="muted small">{{item.itemCount}} 句 · {{item.className}}</view></view>
     <text class="muted">›</text>
@@ -20,9 +27,9 @@
 </view>
 
 <view class="card">
-  <view class="strong">教材</view>
+  <view class="section-title">教材</view>
   <view wx:for="{{books}}" wx:key="id" class="row item" bindtap="openBook" data-id="{{item.id}}">
-  <view class="cv">{{item.initial}}</view>
+    <view class="cv serif">{{item.initial}}</view>
     <view class="grow"><view class="strong ellip">{{item.title}}</view>
       <view class="muted small">{{item.lessonCount}} 课 · {{item.pageCount}} 页</view></view>
     <text class="muted">›</text>

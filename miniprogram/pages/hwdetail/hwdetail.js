@@ -1,9 +1,10 @@
 const api = require('../../utils/api');
 const audio = require('../../utils/audio');
+const clip = require('../../utils/clip');
 const rec = wx.getRecorderManager();
 
 Page({
-  data: { hw: {}, items: [], recIdx: -1, starStr: '' },
+  data: { hw: {}, items: [], recIdx: -1, playingIdx: -1, starStr: '' },
 
   onLoad(o) {
     this.hwId = o.id;
@@ -26,7 +27,7 @@ Page({
       api.toast('录好了，可以试听');
     });
   },
-  onUnload() { audio.stop(); },
+  onUnload() { audio.stop(); clip.stop(); },
 
   openPage() {
     const ids = this.data.items.map((i) => i.hotspotId).join(',');
@@ -39,13 +40,13 @@ Page({
   recToggle(e) {
     const i = e.currentTarget.dataset.idx;
     if (this.data.recIdx === i) { rec.stop(); return; }
+    audio.stop(); clip.stop();          // 录音时不能外放，否则会录进去
     this.setData({ recIdx: i });
     rec.start({ duration: 60000, sampleRate: 16000, numberOfChannels: 1, encodeBitRate: 48000, format: 'mp3' });
   },
   playMine(e) {
-    const c = wx.createInnerAudioContext();
-    c.src = this.data.items[e.currentTarget.dataset.idx].recPath;
-    c.play();
+    const idx = e.currentTarget.dataset.idx;
+    clip.play(this.data.items[idx].recPath, (playing) => this.setData({ playingIdx: playing ? idx : -1 }));
   },
 
   submit() {

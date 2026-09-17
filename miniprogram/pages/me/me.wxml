@@ -1,17 +1,17 @@
 <view class="hero">
-  <view style="font-size:38rpx;font-weight:600">{{user.name}}</view>
-  <view class="small" style="opacity:.9">{{classNames || '未加入班级'}}</view>
-  <view class="row" style="margin-top:28rpx">
-    <view style="margin-right:48rpx"><view style="font-size:44rpx;font-weight:700">{{sum.streak}}</view><view style="font-size:22rpx;opacity:.85">连续打卡</view></view>
-    <view style="margin-right:48rpx"><view style="font-size:44rpx;font-weight:700">{{sum.stars}}</view><view style="font-size:22rpx;opacity:.85">星星</view></view>
-    <view><view style="font-size:44rpx;font-weight:700">{{sum.totalMinutes}}</view><view style="font-size:22rpx;opacity:.85">累计分钟</view></view>
+  <view class="title">{{user.name}}</view>
+  <view class="muted small">{{classNames || '还没加入班级'}}</view>
+  <view class="stats">
+    <view class="stat"><view class="num">{{sum.streak}}</view><view class="lbl">连续打卡</view></view>
+    <view class="stat"><view class="num">{{sum.stars}}</view><view class="lbl">星星</view></view>
+    <view class="stat"><view class="num">{{sum.totalMinutes}}</view><view class="lbl">累计分钟</view></view>
   </view>
 </view>
 <view class="card">
-  <view class="strong">近 4 周打卡</view>
+  <view class="section-title">近 4 周打卡</view>
   <view class="cal">
     <view wx:for="{{cells}}" wx:key="d" class="cell {{item.on ? 'on' : ''}}">{{item.n}}</view>
   </view>
-  <view class="muted small mt">当日有效点读满 {{sum.needSeconds}} 秒即算打卡</view>
+  <view class="muted small mt">当天点读满 {{sum.needSeconds}} 秒就盖一个印</view>
 </view>
-<view class="card"><view class="btn grey" bindtap="logout">退出登录</view></view>
+<view class="card"><view class="btn grey" hover-class="button-hover" bindtap="logout">退出登录</view></view>

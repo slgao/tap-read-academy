@@ -18,7 +18,7 @@
   /* ---------------- 布局 ---------------- */
   function renderTop() {
     const u = Store.user;
-    $top.innerHTML = `<h1>内容后台 <span class="sub">点读热区标注工具</span></h1>
+    $top.innerHTML = `<h1><img src="brand/logo-96.png" alt="">福斯特培训学校 <span class="sub">内容后台</span></h1>
       ${u ? `<span class="pill blue">${esc(u.name)}</span>
              <button class="btn sm grey" data-act="logout">退出</button>` : ''}`;
   }

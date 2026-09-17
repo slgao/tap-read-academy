@@ -1,14 +1,14 @@
 /* 老师端：班级管理 / 布置作业 / 批改 */
 (function () {
   'use strict';
-  const { Store, API, toast, esc, fmtDate, starStr, Player } = App;
+  const { Store, API, toast, esc, fmtDate, starStr, Player, Clip } = App;
   const $view = document.getElementById('view');
   const $top = document.getElementById('topbar');
   const $tab = document.getElementById('tabbar');
   const player = new Player();
   const S = { view: 'classes', pick: { bookId: null, pageId: null, sel: [] } };
 
-  function go(v, d) { player.stop(); S.view = v; Object.assign(S, d || {}); render(); }
+  function go(v, d) { Clip.stop(); player.stop(); S.view = v; Object.assign(S, d || {}); render(); }
 
   function render() {
     const V = VIEWS[S.view] || VIEWS.classes;
@@ -30,18 +30,23 @@
   });
 
   const LOGIN = {
-    top: () => `<h1>点读学堂 <span class="sub">老师端</span></h1>`, noTab: true,
-    body: () => `<div class="hero"><h2>老师，欢迎</h2><div class="small" style="opacity:.9">布置作业 · 批改跟读 · 查看班级</div></div>
+    top: () => `<h1>老师登录</h1>`, noTab: true,
+    body: () => `<div class="login-brand">
+        <img src="brand/logo-192.png" alt="福斯特培训学校校徽">
+        <div class="name">福斯特培训学校</div>
+        <div class="en">FIRST TRAINING SCHOOL</div>
+        <div class="tag">布置作业 · 批改跟读 · 查看班级</div>
+      </div>
       <div class="card">
         <label class="field"><span>姓名</span><input id="i-name" value="王老师"></label>
         <label class="field"><span>老师口令</span><input id="i-tcode" type="password" placeholder="本地开发可不填"></label>
-        <button class="btn block" data-act="login">进入</button>
+        <button class="btn block" data-act="login">进入老师端</button>
         <div class="muted small mt center">演示账号：王老师（已有「六年级 A 班」）</div>
       </div>`,
   };
 
   const CLASSES = {
-    top: () => `<h1>班级</h1><button class="btn sm ghost" data-act="newClass">+ 新建</button>`, tab: true,
+    top: () => `<h1><img src="brand/logo-96.png" alt="">班级</h1><button class="btn sm ghost" data-act="newClass">+ 新建</button>`, tab: true,
     body: async () => {
       const cs = await API.get('/api/classes');
       if (!cs.length) return `<div class="empty">还没有班级<br><span class="small">点右上角新建</span></div>`;
@@ -63,7 +68,7 @@
   };
 
   const HWLIST = {
-    top: () => `<h1>作业</h1><button class="btn sm" data-go="hwnew">+ 布置</button>`, tab: true,
+    top: () => `<h1><img src="brand/logo-96.png" alt="">作业</h1><button class="btn sm" data-go="hwnew">+ 布置</button>`, tab: true,
     body: async () => {
       const hws = await API.get('/api/homeworks');
       if (!hws.length) return `<div class="empty">还没布置过作业<br><span class="small">点右上角「+ 布置」</span></div>`;
@@ -152,13 +157,13 @@
   };
 
   const ME = {
-    top: () => `<h1>我的</h1>`, tab: true,
+    top: () => `<h1><img src="brand/logo-96.png" alt="">我的</h1>`, tab: true,
     body: async () => {
       const st = await API.get('/api/admin/stats');
-      return `<div class="hero"><h2>${esc((Store.user || {}).name || '')}</h2><div class="small" style="opacity:.9">老师端</div>
+      return `<div class="hero"><h2>${esc((Store.user || {}).name || '')}</h2><div class="small">福斯特培训学校 · 老师</div>
         <div class="stats"><div><b>${st.students}</b><span>学生</span></div><div><b>${st.homeworks}</b><span>作业</span></div>
         <div><b>${st.submissions}</b><span>提交</span></div></div></div>
-      <div class="card"><div class="strong mb">内容</div>
+      <div class="card"><div class="section-title mb">教材内容</div>
         <div class="row between"><span class="muted small">教材 ${st.books} 本 · 页面 ${st.pages} 页 · 热区 ${st.hotspots} 个</span>
         <a class="btn sm ghost" href="admin.html" target="_blank">打开内容后台</a></div></div>
       <div class="card"><div class="row between"><span>切换账号</span><button class="btn sm grey" data-act="logout">退出登录</button></div></div>`;
@@ -203,7 +208,7 @@
         toast('作业已发布'); go('hwlist');
       } catch (e) { toast(e.message); el.disabled = false; }
     },
-    playRec(el) { const u = el.dataset.url; if (!u) return toast('没有录音'); new Audio(u).play(); },
+    playRec(el) { const u = el.dataset.url; if (!u) return toast('没有录音'); Clip.play(u, el); },
     setStar(el, ev) {
       const box = el.getBoundingClientRect();
       const n = Math.max(1, Math.min(5, Math.ceil((ev.clientX - box.left) / (box.width / 5))));

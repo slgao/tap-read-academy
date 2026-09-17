@@ -1,5 +1,6 @@
 const api = require('../../utils/api');
 const audio = require('../../utils/audio');
+const clip = require('../../utils/clip');
 const app = getApp();
 const rec = wx.getRecorderManager();
 
@@ -19,8 +20,8 @@ Page({
       this.setData({ recording: false, myRecPath: r.tempFilePath, recTip: '已录 ' + (r.duration / 1000).toFixed(1) + 's' });
     });
   },
-  onUnload() { clearInterval(this.timer); audio.stop(); },
-  onHide() { audio.stop(); this.playing = false; },
+  onUnload() { clearInterval(this.timer); audio.stop(); clip.stop(); },
+  onHide() { audio.stop(); clip.stop(); this.playing = false; },
 
   load(pageId) {
     api.get('/api/pages/' + pageId).then((d) => {
@@ -79,6 +80,7 @@ Page({
 
   recToggle() {
     if (!this.data.recording) {
+      audio.stop(); clip.stop();          // 录音时不能外放，否则会录进去
       rec.start({ duration: 60000, sampleRate: 16000, numberOfChannels: 1, encodeBitRate: 48000, format: 'mp3' });
       this.setData({ recording: true, recTip: '● 录音中，再点一次结束' });
     } else {
@@ -86,9 +88,7 @@ Page({
     }
   },
   playMyRec() {
-    const c = wx.createInnerAudioContext();
-    c.src = this.data.myRecPath;
-    c.play();
+    clip.play(this.data.myRecPath, (playing) => this.setData({ myRecPlaying: playing }));
   },
 
   prevPage() { if (this.data.prevPageId) { audio.stop(); this.load(this.data.prevPageId); } },

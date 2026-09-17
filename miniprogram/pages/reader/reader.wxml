@@ -20,7 +20,7 @@
     <view class="ic {{showHs ? 'on' : ''}}" bindtap="toggleHs">框</view>
     <view class="grow"></view>
     <view class="ic rec {{recording ? 'recording' : ''}}" bindtap="recToggle">录</view>
-    <view wx:if="{{myRecPath}}" class="ic" bindtap="playMyRec">听</view>
+    <view wx:if="{{myRecPath}}" class="ic {{myRecPlaying ? 'playing' : ''}}" bindtap="playMyRec">{{myRecPlaying ? '停' : '听'}}</view>
   </view>
   <view class="row between muted small" style="margin-top:12rpx">
     <text bindtap="prevPage">{{prevPageId ? '‹ 上一页' : ''}}</text>

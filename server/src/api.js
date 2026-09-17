@@ -158,6 +158,47 @@ on('GET', '/api/pages/:id', async (ctx) => {
   });
 });
 
+/* 听力：只列出有课文音频的课；整课连续播放，靠时间轴判断当前在哪一句 */
+on('GET', '/api/listening', async (ctx) => {
+  const out = [];
+  for (const b of await repo.books.listActive()) {
+    const lessons = [];
+    for (const l of await repo.lessons.byBook(b.id)) {
+      const audio = await assetView(l.audioId);
+      if (!audio) continue;
+      let count = 0;
+      for (const p of await repo.pages.byLesson(l.id)) {
+        count += (await repo.hotspots.byPage(p.id)).filter((h) => h.endMs > h.startMs).length;
+      }
+      if (count) lessons.push({ id: l.id, title: l.title, durationMs: audio.durationMs, sentenceCount: count });
+    }
+    if (lessons.length) out.push({ bookId: b.id, bookTitle: b.title, lessons });
+  }
+  ok(ctx.res, out);
+});
+
+on('GET', '/api/lessons/:id/transcript', async (ctx) => {
+  const lesson = await repo.lessons.byId(ctx.params.id);
+  if (!lesson) return fail(ctx.res, 3007, '课不存在');
+  const audio = await assetView(lesson.audioId);
+  if (!audio) return fail(ctx.res, 3010, '这一课还没有音频');
+  const book = await repo.books.byId(lesson.bookId);
+  const sentences = [];
+  for (const p of await repo.pages.byLesson(lesson.id)) {
+    for (const h of await repo.hotspots.byPage(p.id)) {
+      if (h.endMs > h.startMs) {
+        sentences.push({ id: h.id, pageNo: p.pageNo, en: h.en, cn: h.cn, startMs: h.startMs, endMs: h.endMs });
+      }
+    }
+  }
+  sentences.sort((a, b) => a.startMs - b.startMs);
+  ok(ctx.res, {
+    lesson: { id: lesson.id, title: lesson.title, audio },
+    book: { id: book.id, title: book.title },
+    sentences,
+  });
+});
+
 /* 学习时长 / 打卡 */
 on('POST', '/api/study/heartbeat', async (ctx) => {
   const sec = Math.max(0, Math.min(120, Number(ctx.body.seconds) || 0));
