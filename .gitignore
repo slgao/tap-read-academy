@@ -2,6 +2,10 @@ data/
 content/pages/
 content/audio/
 content/rec/
+content/photos/
+content/stems/
+content/shares/
+content/posters/
 tools/out/
 node_modules/
 

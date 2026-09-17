@@ -211,8 +211,69 @@
     fr.readAsDataURL(file);
   });
 
+  /** 手机照片动辄 4–8MB：先缩到长边 1600、JPEG 0.8 再上传，返回 { base64, url } */
+  function compressImage(file, maxSide = 1600, quality = 0.8) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const im = new Image();
+      im.onload = () => {
+        const k = Math.min(1, maxSide / Math.max(im.naturalWidth, im.naturalHeight));
+        const w = Math.round(im.naturalWidth * k), h = Math.round(im.naturalHeight * k);
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        const ctx = cv.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);      // PNG 透明底转 JPEG 不发黑
+        ctx.drawImage(im, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        const dataUrl = cv.toDataURL('image/jpeg', quality);
+        resolve({ base64: dataUrl.split(',')[1], url: dataUrl });
+      };
+      im.onerror = () => { URL.revokeObjectURL(url); reject(new Error('这张图片打不开，换一张试试')); };
+      im.src = url;
+    });
+  }
+
+  /** 和服务端 maskName 一致：李小明 → 李*明 */
+  function maskName(name) {
+    const n = String(name || '').trim();
+    if (n.length <= 1) return n || '同学';
+    if (n.length === 2) return n[0] + '*';
+    return n[0] + '*'.repeat(n.length - 2) + n[n.length - 1];
+  }
+
+  /** 科目小标签 */
+  const subjTag = (s) => (s ? `<span class="subj ${esc(s.color)}">${esc(s.name)}</span>` : '');
+
+  const TYPE_NAME = { single: '单选', multi: '多选', judge: '判断', blank: '填空', photo: '拍照', text: '文字', audio: '录音' };
+
+  /** 作答 / 标准答案转成给人看的文字 */
+  const LETTER = 'ABCDEF';
+  function fmtAnswer(q, v) {
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return '未作答';
+    if (q.type === 'single') return LETTER[v] || '–';
+    if (q.type === 'multi') return v.map((k) => LETTER[k]).sort().join('');
+    if (q.type === 'judge') return v === true || v === 'true' ? '对' : '错';
+    if (q.type === 'blank') return (Array.isArray(v) ? v : [v]).map((x) => String(x || '').trim() || '（空）').join('、');
+    return String(v);
+  }
+  function fmtKey(q) {
+    if (q.answer == null) return '';
+    if (q.type === 'blank') return (q.answer.blanks || []).map((b) => b.join(' / ')).join('、');
+    return fmtAnswer(q, q.answer);
+  }
+  const fmtNum = (n) => (n == null ? '–' : String(Math.round(n * 100) / 100));
+
+  /** 点图看大图 */
+  function lightbox(src) {
+    const m = document.createElement('div');
+    m.className = 'pub-lightbox';
+    m.innerHTML = '<img alt="大图">';
+    m.firstChild.src = src;
+    m.addEventListener('click', () => m.remove());
+    document.body.appendChild(m);
+  }
+
   /** 其他播放器（如听力模式）登记进来，和课文、录音互相停止 */
   const registerPlayer = (p) => { PLAYERS.push(p); };
 
-  global.App = { Store, API, toast, esc, fmtDate, starStr, Player, Rec, Clip, fileToBase64, registerPlayer };
+  global.App = { Store, API, toast, esc, fmtDate, starStr, Player, Rec, Clip, fileToBase64, registerPlayer, compressImage, maskName, subjTag, TYPE_NAME, lightbox, LETTER, fmtAnswer, fmtKey, fmtNum };
 })(window);

@@ -47,11 +47,35 @@ const toHomework = (r) => r && ({
   bookId: r.book_id, pageId: r.page_id,
   hotspotIds: JSON.parse(r.hotspot_ids || '[]'),
   note: r.note, deadline: r.deadline, createdAt: r.created_at,
+  subjectId: r.subject_id, kind: r.kind || 'follow_read',
 });
 const toSubmission = (r) => r && ({
   id: r.id, homeworkId: r.homework_id, studentId: r.student_id, status: r.status,
   submittedAt: r.submitted_at, elapsedSec: r.elapsed_sec, stars: r.stars,
   reviewText: r.review_text, reviewedAt: r.reviewed_at,
+  score: r.score, maxScore: r.max_score, excellent: !!r.excellent,
+});
+const toSubject = (r) => r && ({ id: r.id, code: r.code, name: r.name, color: r.color, sort: r.sort });
+const parseJSON = (t, d) => { try { return t == null || t === '' ? d : JSON.parse(t); } catch { return d; } };
+const toQuestion = (r) => r && ({
+  id: r.id, homeworkId: r.homework_id, sort: r.sort, type: r.type, stem: r.stem, stemImageId: r.stem_image_id,
+  options: parseJSON(r.options, []), answer: parseJSON(r.answer, null), score: r.score, analysis: r.analysis,
+});
+const toAnswer = (r) => r && ({
+  id: r.id, submissionId: r.submission_id, questionId: r.question_id, value: parseJSON(r.value, null),
+  assetIds: parseJSON(r.asset_ids, []), autoCorrect: r.auto_correct == null ? null : !!r.auto_correct,
+  score: r.score, comment: r.comment,
+});
+const toShare = (r) => r && ({
+  id: r.id, token: r.token, type: r.type, studentId: r.student_id, submissionId: r.submission_id,
+  subjectId: r.subject_id, title: r.title, imagePath: r.image_path, photoIds: parseJSON(r.photo_ids, []),
+  comment: r.comment, stars: r.stars, showFullName: !!r.show_full_name, status: r.status,
+  views: r.views, createdAt: r.created_at, revokedAt: r.revoked_at,
+});
+const toLead = (r) => r && ({
+  id: r.id, shareId: r.share_id, refStudentId: r.ref_student_id, source: r.source, phone: r.phone,
+  grade: r.grade, subjects: parseJSON(r.subjects, []), contactTime: r.contact_time, status: r.status,
+  note: r.note, createdAt: r.created_at,
 });
 const toSubItem = (r) => r && ({
   id: r.id, submissionId: r.submission_id, hotspotId: r.hotspot_id,
@@ -237,12 +261,28 @@ const homeworks = {
     return q(`SELECT * FROM homeworks WHERE class_id IN (${marks}) ORDER BY id DESC LIMIT ${num(limit)}`)
       .all(...ids.map(num)).map(toHomework);
   },
-  async create({ classId, teacherId, title, type, bookId, pageId, hotspotIds, note, deadline }) {
-    const r = q(`INSERT INTO homeworks (class_id, teacher_id, title, type, book_id, page_id, hotspot_ids, note, deadline, created_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?)`)
+  async create({ classId, teacherId, title, type, bookId, pageId, hotspotIds, note, deadline, subjectId }) {
+    const r = q(`INSERT INTO homeworks (class_id, teacher_id, title, type, book_id, page_id, hotspot_ids, note, deadline, created_at, subject_id, kind)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,'follow_read')`)
       .run(num(classId), num(teacherId), title, type || 'follow_read', num(bookId), num(pageId),
-        JSON.stringify(hotspotIds.map(num)), note || '', deadline || '', now());
+        JSON.stringify(hotspotIds.map(num)), note || '', deadline || '', now(), subjectId ? num(subjectId) : null);
     return homeworks.byId(Number(r.lastInsertRowid));
+  },
+  /** 题目作业：作业与题目一起写入，要么全成功要么全不写 */
+  async createWithQuestions({ classId, teacherId, subjectId, title, note, deadline, questions }) {
+    db.exec('BEGIN');
+    try {
+      const r = q(`INSERT INTO homeworks (class_id, teacher_id, title, type, hotspot_ids, note, deadline, created_at, subject_id, kind)
+                   VALUES (?,?,?,'questions','[]',?,?,?,?,'questions')`)
+        .run(num(classId), num(teacherId), title, note || '', deadline || '', now(), num(subjectId));
+      const hwId = Number(r.lastInsertRowid);
+      const ins = q(`INSERT INTO questions (homework_id, sort, type, stem, stem_image_id, options, answer, score, analysis)
+                     VALUES (?,?,?,?,?,?,?,?,?)`);
+      questions.forEach((x, i) => ins.run(hwId, i + 1, x.type, x.stem || '', x.stemImageId || null,
+        JSON.stringify(x.options || []), JSON.stringify(x.answer === undefined ? null : x.answer), Number(x.score) || 1, x.analysis || ''));
+      db.exec('COMMIT');
+      return homeworks.byId(hwId);
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
   },
   async count() { return count('SELECT COUNT(*) n FROM homeworks'); },
   async countByBook(bookId) { return count('SELECT COUNT(*) n FROM homeworks WHERE book_id=?', num(bookId)); },
@@ -251,7 +291,9 @@ const homeworks = {
   async remove(id) {
     for (const r of q('SELECT id FROM submissions WHERE homework_id=?').all(num(id))) {
       q('DELETE FROM submission_items WHERE submission_id=?').run(r.id);
+      q('DELETE FROM answers WHERE submission_id=?').run(r.id);
     }
+    q('DELETE FROM questions WHERE homework_id=?').run(num(id));
     q('DELETE FROM submissions WHERE homework_id=?').run(num(id));
     q('DELETE FROM homeworks WHERE id=?').run(num(id));
   },
@@ -280,8 +322,14 @@ const submissions = {
       .run(num(stars), reviewText || '', now(), num(id));
   },
   async reject(id, reviewText) {
-    q(`UPDATE submissions SET status='rejected', review_text=? WHERE id=?`).run(reviewText || '', num(id));
+    q(`UPDATE submissions SET status='rejected', review_text=?, excellent=0 WHERE id=?`).run(reviewText || '', num(id));
   },
+  async setScore(id, { score, maxScore, status, stars }) {
+    q(`UPDATE submissions SET score=?, max_score=?, status=?, stars=COALESCE(?, stars),
+       reviewed_at=CASE WHEN ?='reviewed' THEN ? ELSE reviewed_at END WHERE id=?`)
+      .run(score, maxScore, status, stars == null ? null : num(stars), status, now(), num(id));
+  },
+  async setExcellent(id, excellent) { q('UPDATE submissions SET excellent=? WHERE id=?').run(excellent ? 1 : 0, num(id)); },
   async count() { return count('SELECT COUNT(*) n FROM submissions'); },
 };
 
@@ -316,7 +364,114 @@ const checkins = {
   },
 };
 
+
+/* ---------- 科目 ---------- */
+const subjects = {
+  async all() { return q('SELECT * FROM subjects ORDER BY sort, id').all().map(toSubject); },
+  async byId(id) { return toSubject(q('SELECT * FROM subjects WHERE id=?').get(num(id))); },
+  async byCode(code) { return toSubject(q('SELECT * FROM subjects WHERE code=?').get(code)); },
+  async idsForTeacher(userId) {
+    return q('SELECT subject_id AS id FROM teacher_subjects WHERE user_id=?').all(num(userId)).map((r) => r.id);
+  },
+  async setForTeacher(userId, ids) {
+    q('DELETE FROM teacher_subjects WHERE user_id=?').run(num(userId));
+    const ins = q('INSERT OR IGNORE INTO teacher_subjects (user_id, subject_id) VALUES (?,?)');
+    for (const id of ids) ins.run(num(userId), num(id));
+  },
+};
+
+/* ---------- 题目与作答 ---------- */
+const questions = {
+  async byHomework(homeworkId) {
+    return q('SELECT * FROM questions WHERE homework_id=? ORDER BY sort, id').all(num(homeworkId)).map(toQuestion);
+  },
+};
+
+const answers = {
+  async bySubmission(submissionId) {
+    return q('SELECT * FROM answers WHERE submission_id=?').all(num(submissionId)).map(toAnswer);
+  },
+  async byId(id) { return toAnswer(q('SELECT * FROM answers WHERE id=?').get(num(id))); },
+  /** 整份重交：清掉旧作答再写入 */
+  async replaceAll(submissionId, list) {
+    db.exec('BEGIN');
+    try {
+      q('DELETE FROM answers WHERE submission_id=?').run(num(submissionId));
+      const ins = q(`INSERT INTO answers (submission_id, question_id, value, asset_ids, auto_correct, score, comment)
+                     VALUES (?,?,?,?,?,?,?)`);
+      for (const a of list) {
+        ins.run(num(submissionId), num(a.questionId), JSON.stringify(a.value === undefined ? null : a.value),
+          JSON.stringify(a.assetIds || []), a.autoCorrect == null ? null : (a.autoCorrect ? 1 : 0),
+          a.score == null ? null : Number(a.score), a.comment || '');
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+  },
+  async setManual(id, { score, comment }) {
+    q('UPDATE answers SET score=?, comment=? WHERE id=?').run(score == null ? null : Number(score), comment || '', num(id));
+  },
+};
+
+/* ---------- 分享与咨询 ---------- */
+const shares = {
+  async byToken(token) { return toShare(q('SELECT * FROM shares WHERE token=?').get(String(token))); },
+  async byId(id) { return toShare(q('SELECT * FROM shares WHERE id=?').get(num(id))); },
+  async byStudent(studentId) {
+    return q('SELECT * FROM shares WHERE student_id=? ORDER BY id DESC').all(num(studentId)).map(toShare);
+  },
+  async create(x) {
+    const r = q(`INSERT INTO shares (token, type, student_id, submission_id, subject_id, title, image_path, photo_ids,
+                 comment, stars, show_full_name, status, views, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',0,?)`)
+      .run(x.token, x.type, num(x.studentId), x.submissionId ? num(x.submissionId) : null, x.subjectId ? num(x.subjectId) : null,
+        x.title || '', x.imagePath || '', JSON.stringify(x.photoIds || []), x.comment || '',
+        x.stars == null ? null : num(x.stars), x.showFullName ? 1 : 0, now());
+    return shares.byId(Number(r.lastInsertRowid));
+  },
+  async revoke(id) { q(`UPDATE shares SET status='revoked', revoked_at=? WHERE id=?`).run(now(), num(id)); },
+  /** 同一访客只计一次浏览 */
+  async addView(shareId, visitor) {
+    const r = q('INSERT OR IGNORE INTO share_views (share_id, visitor, first_at) VALUES (?,?,?)').run(num(shareId), visitor, now());
+    if (r.changes) q('UPDATE shares SET views=views+1 WHERE id=?').run(num(shareId));
+  },
+  /** 作品展：书法作品里仍在分享中的 */
+  async gallery(subjectId, limit = 60) {
+    return q(`SELECT * FROM shares WHERE status='active' AND type='work' AND subject_id=? ORDER BY id DESC LIMIT ${num(limit)}`)
+      .all(num(subjectId)).map(toShare);
+  },
+  async stats(sinceDate) {
+    const row = q(`SELECT COUNT(*) n, COALESCE(SUM(views),0) v FROM shares WHERE created_at >= ?`).get(sinceDate);
+    const active = count(`SELECT COUNT(*) n FROM shares WHERE status='active'`);
+    const top = q(`SELECT s.student_id AS studentId, u.name, COUNT(*) AS shares, SUM(s.views) AS views
+                   FROM shares s JOIN users u ON u.id=s.student_id GROUP BY s.student_id ORDER BY views DESC, shares DESC LIMIT 5`).all();
+    return { recentShares: row.n, recentViews: row.v, activeShares: active, top };
+  },
+};
+
+const leads = {
+  async create(x) {
+    const r = q(`INSERT INTO leads (share_id, ref_student_id, source, phone, grade, subjects, contact_time, status, ip, created_at)
+                 VALUES (?,?,?,?,?,?,?,'new',?,?)`)
+      .run(x.shareId ? num(x.shareId) : null, x.refStudentId ? num(x.refStudentId) : null, x.source,
+        x.phone, x.grade || '', JSON.stringify(x.subjects || []), x.contactTime || '', x.ip || '', now());
+    return Number(r.lastInsertRowid);
+  },
+  async list(limit = 200) {
+    return q(`SELECT l.*, u.name AS ref_name FROM leads l LEFT JOIN users u ON u.id=l.ref_student_id
+              ORDER BY l.id DESC LIMIT ${num(limit)}`).all().map((r) => ({ ...toLead(r), refName: r.ref_name || '' }));
+  },
+  async update(id, { status, note }) {
+    q('UPDATE leads SET status=COALESCE(?, status), note=COALESCE(?, note) WHERE id=?')
+      .run(status || null, note == null ? null : String(note), num(id));
+  },
+  async countSince(sinceDate) { return count('SELECT COUNT(*) n FROM leads WHERE created_at >= ?', sinceDate); },
+  async countNew() { return count(`SELECT COUNT(*) n FROM leads WHERE status='new'`); },
+  async remove(id) { q('DELETE FROM leads WHERE id=?').run(num(id)); },
+  async recentByPhone(phone, sinceTime) { return count('SELECT COUNT(*) n FROM leads WHERE phone=? AND created_at >= ?', phone, sinceTime); },
+};
+
 module.exports = {
   users, sessions, classes, books, lessons, pages, hotspots, assets,
   homeworks, submissions, submissionItems, checkins,
+  subjects, questions, answers, shares, leads,
 };

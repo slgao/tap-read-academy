@@ -11,7 +11,7 @@ const { execFileSync } = require('node:child_process');
 const { CONTENT_DIR } = require('./db');
 const { rid } = require('./util');
 
-const DIR_OF = { image: 'pages', audio: 'audio', rec: 'rec' };
+const DIR_OF = { image: 'pages', audio: 'audio', rec: 'rec', photo: 'photos', stem: 'stems' };
 
 /** 保存 base64 内容，返回相对路径与字节数 */
 async function save(kind, base64, ext) {
@@ -54,4 +54,10 @@ async function imageSize(relPath) {
   } catch { return { w: 0, h: 0 }; }
 }
 
-module.exports = { save, saveAs, urlOf, probeDurationMs, imageSize };
+/** 删除文件（撤回分享时删掉分享图）；文件不存在不报错 */
+async function remove(relPath) {
+  if (!relPath || relPath.includes('..')) return;
+  try { fs.unlinkSync(path.join(CONTENT_DIR, relPath)); } catch (e) {}
+}
+
+module.exports = { save, saveAs, remove, urlOf, probeDurationMs, imageSize };

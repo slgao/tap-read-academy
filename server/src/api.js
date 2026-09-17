@@ -6,6 +6,7 @@
 const repo = require('./repo');
 const store = require('./storage');
 const { ok, fail, readBody, rid, today, inviteCode } = require('./util');
+const grading = require('./grading');
 
 const CHECKIN_SECONDS = 60;   // 当日有效点读满 60 秒即算打卡（PRD 正式值为 5 分钟，demo 调小便于体验）
 
@@ -31,6 +32,27 @@ async function userFromToken(req) {
   const token = h.startsWith('Bearer ') ? h.slice(7) : (h || '');
   return token ? repo.users.byToken(token) : null;
 }
+
+/** 分享页上的名字：默认只显示姓和最后一个字 */
+function maskName(name) {
+  const n = String(name || '').trim();
+  if (n.length <= 1) return n || '同学';
+  if (n.length === 2) return n[0] + '*';
+  return n[0] + '*'.repeat(n.length - 2) + n[n.length - 1];
+}
+
+/** base64 图片解码并校验（JPG/PNG、大小上限） */
+function decodeImage(base64, maxBytes = 3 * 1024 * 1024) {
+  const buf = Buffer.from(String(base64 || '').replace(/^data:[^;]+;base64,/, ''), 'base64');
+  if (!buf.length) return { error: '图片为空' };
+  if (buf.length > maxBytes) return { error: '图片太大，请重新拍一张' };
+  const jpg = buf[0] === 0xFF && buf[1] === 0xD8;
+  const png = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
+  if (!jpg && !png) return { error: '只支持 JPG 或 PNG 图片' };
+  return { buf, ext: jpg ? 'jpg' : 'png' };
+}
+
+const subjectView = (x) => x && { id: x.id, code: x.code, name: x.name, color: x.color };
 
 const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, stars: u.stars, streak: u.streak, lastCheckin: u.lastCheckin });
 
@@ -256,19 +278,22 @@ on('POST', '/api/homeworks', async (ctx) => {
   const page = await repo.pages.byId(pageId);
   if (!page) return fail(ctx.res, 3003, '页面不存在');
   const lesson = await repo.lessons.byId(page.lessonId);
+  const subject = ctx.body.subjectId ? await repo.subjects.byId(ctx.body.subjectId) : await repo.subjects.byCode('en');
   const hw = await repo.homeworks.create({
     classId, teacherId: ctx.user.id, title: String(title), type: 'follow_read',
-    bookId: lesson.bookId, pageId: page.id, hotspotIds, note, deadline,
+    bookId: lesson.bookId, pageId: page.id, hotspotIds, note, deadline, subjectId: subject ? subject.id : null,
   });
   ok(ctx.res, { id: hw.id });
 }, { roles: ['teacher', 'admin'] });
 
 async function hwBrief(hw, user) {
   const cls = await repo.classes.byId(hw.classId);
+  const itemCount = hw.kind === 'questions' ? (await repo.questions.byHomework(hw.id)).length : hw.hotspotIds.length;
   const out = {
     id: hw.id, title: hw.title, className: cls ? cls.name : '', classId: hw.classId,
-    pageId: hw.pageId, itemCount: hw.hotspotIds.length, note: hw.note,
+    pageId: hw.pageId, itemCount, note: hw.note,
     deadline: hw.deadline, createdAt: hw.createdAt,
+    kind: hw.kind, subject: subjectView(await repo.subjects.byId(hw.subjectId)),
   };
   if (user.role === 'student') {
     const sub = await repo.submissions.byHomeworkAndStudent(hw.id, user.id);
@@ -276,6 +301,9 @@ async function hwBrief(hw, user) {
     out.stars = sub ? sub.stars : null;
     out.reviewText = sub ? sub.reviewText : null;
     out.submissionId = sub ? sub.id : null;
+    out.score = sub ? sub.score : null;
+    out.maxScore = sub ? sub.maxScore : null;
+    out.excellent = sub ? sub.excellent : false;
   } else {
     out.submitted = await repo.submissions.countByHomework(hw.id);
     out.reviewed = await repo.submissions.countReviewed(hw.id);
@@ -286,7 +314,15 @@ async function hwBrief(hw, user) {
 
 on('GET', '/api/homeworks', async (ctx) => {
   const ids = await repo.classes.idsForUser(ctx.user);
-  const rows = await repo.homeworks.byClassIds(ids);
+  let rows = await repo.homeworks.byClassIds(ids);
+  if (ctx.user.role === 'teacher') {
+    const mine = await repo.subjects.idsForTeacher(ctx.user.id);
+    if (mine.length) rows = rows.filter((h) => mine.includes(h.subjectId));   // 老师只看自己教的科目
+  }
+  if (ctx.query.subject) {
+    const sub = await repo.subjects.byCode(ctx.query.subject);
+    rows = sub ? rows.filter((h) => h.subjectId === sub.id) : [];
+  }
   const out = [];
   for (const hw of rows) out.push(await hwBrief(hw, ctx.user));
   ok(ctx.res, out);
@@ -295,6 +331,7 @@ on('GET', '/api/homeworks', async (ctx) => {
 on('GET', '/api/homeworks/:id', async (ctx) => {
   const hw = await repo.homeworks.byId(ctx.params.id);
   if (!hw) return fail(ctx.res, 3004, '作业不存在');
+  if (hw.kind === 'questions') return ok(ctx.res, await questionHomeworkDetail(hw, ctx.user));
 
   const items = [];
   for (const hid of hw.hotspotIds) {
@@ -357,6 +394,22 @@ on('DELETE', '/api/homeworks/:id', async (ctx) => {
 on('GET', '/api/homeworks/:id/submissions', async (ctx) => {
   const hw = await repo.homeworks.byId(ctx.params.id);
   if (!hw) return fail(ctx.res, 3004, '作业不存在');
+  if (hw.kind === 'questions') {
+    const qs = await repo.questions.byHomework(hw.id);
+    const questions = [];
+    for (const q of qs) questions.push({ id: q.id, sort: q.sort, type: q.type, stem: q.stem, stemImage: await assetView(q.stemImageId),
+      options: q.options, answer: q.answer, score: q.score, auto: grading.AUTO_TYPES.includes(q.type) });
+    const rows = [];
+    for (const m of await repo.classes.members(hw.classId)) {
+      const sub = await repo.submissions.byHomeworkAndStudent(hw.id, m.id);
+      const answers = [];
+      if (sub) for (const a of await repo.answers.bySubmission(sub.id)) answers.push(await answerView(a));
+      rows.push({ studentId: m.id, studentName: m.name, status: sub ? sub.status : 'todo', submissionId: sub ? sub.id : null,
+        submittedAt: sub ? sub.submittedAt : null, score: sub ? sub.score : null, maxScore: sub ? sub.maxScore : null,
+        stars: sub ? sub.stars : null, reviewText: sub ? sub.reviewText : null, excellent: sub ? sub.excellent : false, answers });
+    }
+    return ok(ctx.res, { homework: await hwBrief(hw, ctx.user), questions, rows });
+  }
   const rows = [];
   for (const m of await repo.classes.members(hw.classId)) {
     const sub = await repo.submissions.byHomeworkAndStudent(hw.id, m.id);
@@ -374,6 +427,7 @@ on('GET', '/api/homeworks/:id/submissions', async (ctx) => {
       submittedAt: sub ? sub.submittedAt : null,
       stars: sub ? sub.stars : null,
       reviewText: sub ? sub.reviewText : null,
+      excellent: sub ? sub.excellent : false,
       items,
     });
   }
@@ -384,8 +438,10 @@ on('POST', '/api/submissions/:id/review', async (ctx) => {
   const sub = await repo.submissions.byId(ctx.params.id);
   if (!sub) return fail(ctx.res, 3006, '提交记录不存在');
   const stars = Math.max(1, Math.min(5, Number(ctx.body.stars) || 5));
+  const first = sub.status !== 'reviewed';
   await repo.submissions.review(sub.id, { stars, reviewText: String(ctx.body.reviewText || '') });
-  await repo.users.addStars(sub.studentId, stars * 2);
+  await repo.submissions.setExcellent(sub.id, !!ctx.body.excellent);
+  if (first) await repo.users.addStars(sub.studentId, stars * 2 + (ctx.body.excellent ? 10 : 0));   // 重复批改不重复加星
   ok(ctx.res, { ok: true });
 }, { roles: ['teacher', 'admin'] });
 
@@ -482,6 +538,289 @@ on('GET', '/api/admin/stats', async (ctx) => {
   });
 }, { roles: ['teacher', 'admin'] });
 
+
+/* ================= 多科目：科目 ================= */
+on('GET', '/api/subjects', async (ctx) => {
+  const all = (await repo.subjects.all()).map(subjectView);
+  const mine = ctx.user.role === 'student' ? [] : await repo.subjects.idsForTeacher(ctx.user.id);
+  ok(ctx.res, { subjects: all, mine });
+});
+
+on('PUT', '/api/me/subjects', async (ctx) => {
+  const all = await repo.subjects.all();
+  const ids = (Array.isArray(ctx.body.subjectIds) ? ctx.body.subjectIds : []).map(Number).filter((id) => all.some((x) => x.id === id));
+  await repo.subjects.setForTeacher(ctx.user.id, ids);
+  ok(ctx.res, { mine: ids });
+}, { roles: ['teacher', 'admin'] });
+
+/* ================= 多科目：题目作业 ================= */
+on('POST', '/api/homeworks/questions', async (ctx) => {
+  const { classId, subjectId, title, note, deadline } = ctx.body;
+  const list = Array.isArray(ctx.body.questions) ? ctx.body.questions : [];
+  if (!classId || !String(title || '').trim()) return fail(ctx.res, 1001, '请选择班级并填写作业标题');
+  const subject = await repo.subjects.byId(subjectId);
+  if (!subject) return fail(ctx.res, 1001, '请选择科目');
+  if (!list.length) return fail(ctx.res, 1001, '至少出一道题');
+  if (list.length > 50) return fail(ctx.res, 1001, '一份作业最多 50 道题');
+  for (let i = 0; i < list.length; i++) {
+    const err = grading.validateQuestion(list[i], i);
+    if (err) return fail(ctx.res, 1001, err);
+  }
+  const prepared = [];
+  for (const [i, x] of list.entries()) {
+    let stemImageId = null;
+    if (x.stemImageBase64) {
+      const img = decodeImage(x.stemImageBase64, 5 * 1024 * 1024);
+      if (img.error) return fail(ctx.res, 1001, `第 ${i + 1} 题图片：${img.error}`);
+      const { asset } = await putAsset('stem', img.buf.toString('base64'), img.ext, { durationMs: 0, mime: 'image/' + img.ext });
+      stemImageId = asset.id;
+    }
+    const answer = x.type === 'single' ? Number(x.answer)
+      : x.type === 'multi' ? x.answer.map(Number)
+      : x.type === 'judge' ? Boolean(x.answer)
+      : x.type === 'blank' ? { blanks: x.answer.blanks.map((b) => b.map((v) => String(v).trim()).filter(Boolean)), tolerance: Number(x.answer.tolerance) || 0 }
+      : null;
+    prepared.push({ type: x.type, stem: String(x.stem || '').trim(), stemImageId, options: (x.options || []).map((o) => String(o).trim()),
+      answer, score: Number(x.score), analysis: String(x.analysis || '').trim() });
+  }
+  const hw = await repo.homeworks.createWithQuestions({
+    classId, teacherId: ctx.user.id, subjectId: subject.id, title: String(title).trim(), note, deadline, questions: prepared,
+  });
+  ok(ctx.res, { id: hw.id });
+}, { roles: ['teacher', 'admin'] });
+
+async function answerView(a) {
+  const assets = [];
+  for (const id of a.assetIds) { const v = await assetView(id); if (v) assets.push(v); }
+  return { id: a.id, questionId: a.questionId, value: a.value, assets, autoCorrect: a.autoCorrect, score: a.score, comment: a.comment };
+}
+
+/** 题目作业详情。标准答案和解析：老师随时可见；学生在批改完成后才可见 */
+async function questionHomeworkDetail(hw, user) {
+  const qs = await repo.questions.byHomework(hw.id);
+  const out = { ...(await hwBrief(hw, user)), questions: [] };
+  let sub = null, answers = [];
+  if (user.role === 'student') {
+    sub = await repo.submissions.byHomeworkAndStudent(hw.id, user.id);
+    if (sub) answers = await repo.answers.bySubmission(sub.id);
+  }
+  const reveal = user.role !== 'student' || (sub && sub.status === 'reviewed');
+  for (const q of qs) {
+    const view = { id: q.id, type: q.type, stem: q.stem, stemImage: await assetView(q.stemImageId),
+      options: q.options, score: q.score, auto: grading.AUTO_TYPES.includes(q.type) };
+    if (q.type === 'blank') view.blankCount = (q.answer && q.answer.blanks || []).length;
+    if (reveal) { view.answer = q.answer; view.analysis = q.analysis; }
+    const a = answers.find((x) => x.questionId === q.id);
+    if (a) view.myAnswer = await answerView(a);
+    out.questions.push(view);
+  }
+  if (sub) out.mySubmission = { id: sub.id, status: sub.status, score: sub.score, maxScore: sub.maxScore, stars: sub.stars,
+    reviewText: sub.reviewText, excellent: sub.excellent, submittedAt: sub.submittedAt };
+  return out;
+}
+
+on('POST', '/api/homeworks/:id/answers', async (ctx) => {
+  const hw = await repo.homeworks.byId(ctx.params.id);
+  if (!hw || hw.kind !== 'questions') return fail(ctx.res, 3004, '作业不存在');
+  const classIds = await repo.classes.idsForUser(ctx.user);
+  if (!classIds.includes(hw.classId)) return fail(ctx.res, 403, '这不是你班级的作业');
+  let sub = await repo.submissions.byHomeworkAndStudent(hw.id, ctx.user.id);
+  if (sub && sub.status === 'reviewed') return fail(ctx.res, 3005, '作业已批改，如需重交请让老师打回');
+
+  const qs = await repo.questions.byHomework(hw.id);
+  const given = Array.isArray(ctx.body.answers) ? ctx.body.answers : [];
+  const byQ = new Map(given.map((a) => [Number(a.questionId), a]));
+
+  // 先校验：需要老师批改的题必须真的交了东西，避免"提交成功"却什么都没收到
+  for (const [i, q] of qs.entries()) {
+    const a = byQ.get(q.id) || {};
+    if (q.type === 'photo' && !(Array.isArray(a.photos) && a.photos.length)) return fail(ctx.res, 1001, `第 ${i + 1} 题还没有拍照`);
+    if (q.type === 'audio' && !a.audioBase64) return fail(ctx.res, 1001, `第 ${i + 1} 题还没有录音`);
+    if (q.type === 'text' && !String(a.value || '').trim()) return fail(ctx.res, 1001, `第 ${i + 1} 题还没有作答`);
+    if (q.type === 'photo' && a.photos.length > 6) return fail(ctx.res, 1001, `第 ${i + 1} 题最多 6 张照片`);
+    if (q.type === 'photo') for (const ph of a.photos) { const d = decodeImage(ph); if (d.error) return fail(ctx.res, 1001, `第 ${i + 1} 题照片：${d.error}`); }
+  }
+
+  if (!sub) sub = await repo.submissions.create({ homeworkId: hw.id, studentId: ctx.user.id, elapsedSec: ctx.body.elapsedSec });
+  else await repo.submissions.markResubmitted(sub.id, ctx.body.elapsedSec);
+
+  const rows = [];
+  let score = 0, maxScore = 0, manual = 0;
+  const results = [];
+  for (const q of qs) {
+    const a = byQ.get(q.id) || {};
+    maxScore += Number(q.score) || 0;
+    const row = { questionId: q.id, value: null, assetIds: [], autoCorrect: null, score: null };
+    if (grading.AUTO_TYPES.includes(q.type)) {
+      row.value = a.value === undefined ? null : a.value;
+      const r = grading.gradeQuestion(q, row.value);
+      row.autoCorrect = r.correct; row.score = r.score; score += r.score;
+    } else {
+      manual++;
+      if (q.type === 'text') row.value = String(a.value).slice(0, 5000);
+      if (q.type === 'photo') {
+        for (const ph of a.photos) {
+          const d = decodeImage(ph);
+          const { asset } = await putAsset('photo', d.buf.toString('base64'), d.ext, { durationMs: 0, mime: 'image/' + d.ext });
+          row.assetIds.push(asset.id);
+        }
+      }
+      if (q.type === 'audio') {
+        const { asset } = await putAsset('rec', a.audioBase64, a.ext || 'webm', { durationMs: Number(a.durationMs) || null });
+        row.assetIds.push(asset.id);
+      }
+    }
+    rows.push(row);
+    results.push({ questionId: q.id, correct: row.autoCorrect, score: row.score });
+  }
+  await repo.answers.replaceAll(sub.id, rows);
+
+  // 全是客观题：系统直接批改完成；有主观题：等老师
+  const allAuto = manual === 0;
+  const stars = allAuto ? Math.max(1, Math.min(5, Math.round((maxScore ? score / maxScore : 0) * 5))) : null;
+  await repo.submissions.setScore(sub.id, { score, maxScore, status: allAuto ? 'reviewed' : 'submitted', stars });
+  await repo.users.addStars(ctx.user.id, 5 + (allAuto ? stars * 2 : 0));
+  ok(ctx.res, { submissionId: sub.id, status: allAuto ? 'reviewed' : 'submitted', score, maxScore, pending: manual, results });
+});
+
+/** 老师批改题目作业：给主观题打分，勾选优秀 */
+on('POST', '/api/submissions/:id/grade', async (ctx) => {
+  const sub = await repo.submissions.byId(ctx.params.id);
+  if (!sub) return fail(ctx.res, 3006, '提交记录不存在');
+  const hw = await repo.homeworks.byId(sub.homeworkId);
+  if (!hw || hw.kind !== 'questions') return fail(ctx.res, 1001, '这不是题目作业');
+  const qs = await repo.questions.byHomework(hw.id);
+  const ans = await repo.answers.bySubmission(sub.id);
+  const given = new Map((Array.isArray(ctx.body.scores) ? ctx.body.scores : []).map((x) => [Number(x.answerId), x]));
+
+  let score = 0, maxScore = 0;
+  for (const q of qs) {
+    maxScore += Number(q.score) || 0;
+    const a = ans.find((x) => x.questionId === q.id);
+    if (!a) continue;
+    if (grading.AUTO_TYPES.includes(q.type)) { score += Number(a.score) || 0; continue; }
+    const g = given.get(a.id);
+    const v = g ? Number(g.score) : (a.score == null ? NaN : Number(a.score));
+    if (!(v >= 0 && v <= Number(q.score))) return fail(ctx.res, 1001, `第 ${q.sort} 题要打 0–${q.score} 分`);
+    await repo.answers.setManual(a.id, { score: v, comment: g ? String(g.comment || '').slice(0, 500) : a.comment });
+    score += v;
+  }
+  const first = sub.status !== 'reviewed';
+  const stars = Math.max(1, Math.min(5, Math.round((maxScore ? score / maxScore : 0) * 5)));
+  await repo.submissions.setScore(sub.id, { score, maxScore, status: 'reviewed', stars });
+  await repo.submissions.review(sub.id, { stars, reviewText: String(ctx.body.reviewText || '').slice(0, 500) });
+  await repo.submissions.setExcellent(sub.id, !!ctx.body.excellent);
+  if (first) await repo.users.addStars(sub.studentId, stars * 2 + (ctx.body.excellent ? 10 : 0));
+  ok(ctx.res, { score, maxScore, stars });
+}, { roles: ['teacher', 'admin'] });
+
+/* ================= 宣传：喜报、作品、预约试听 ================= */
+on('POST', '/api/shares', async (ctx) => {
+  const type = ctx.body.type;
+  if (!['praise', 'work'].includes(type)) return fail(ctx.res, 1001, '分享类型不对');
+  const sub = await repo.submissions.byId(ctx.body.submissionId);
+  if (!sub || sub.studentId !== ctx.user.id) return fail(ctx.res, 403, '只能分享自己的作业');
+  if (sub.status !== 'reviewed') return fail(ctx.res, 3011, '老师批改后才能分享');
+  const hw = await repo.homeworks.byId(sub.homeworkId);
+  const subject = await repo.subjects.byId(hw.subjectId);
+  if (type === 'praise' && !sub.excellent) return fail(ctx.res, 3011, '被评为优秀作业才有喜报');
+
+  let photoIds = [];
+  if (type === 'work') {
+    if (!subject || subject.code !== 'calli') return fail(ctx.res, 3011, '作品展目前只收书法作品');
+    for (const a of await repo.answers.bySubmission(sub.id)) photoIds.push(...a.assetIds);
+    const imgs = [];
+    for (const id of photoIds) { const x = await repo.assets.byId(id); if (x && x.kind === 'photo') imgs.push(id); }
+    photoIds = imgs;
+    if (!photoIds.length) return fail(ctx.res, 3011, '这份作业没有作品照片');
+  }
+  const img = decodeImage(ctx.body.imageBase64);
+  if (img.error) return fail(ctx.res, 1001, '分享图：' + img.error);
+
+  const token = rid().slice(0, 20);
+  const imagePath = `shares/${token}.${img.ext}`;
+  await store.saveAs(imagePath, img.buf);
+  const showFullName = !!ctx.body.showFullName;
+  const shown = showFullName ? ctx.user.name : maskName(ctx.user.name);
+  const share = await repo.shares.create({
+    token, type, studentId: ctx.user.id, submissionId: sub.id, subjectId: subject ? subject.id : null,
+    title: type === 'praise' ? `${shown}的优秀作业喜报` : `${shown}的书法作品`,
+    imagePath, photoIds, comment: sub.reviewText, stars: sub.stars, showFullName,
+  });
+  ok(ctx.res, { id: share.id, token, url: '/s/' + token });
+});
+
+on('GET', '/api/shares/mine', async (ctx) => {
+  const list = await repo.shares.byStudent(ctx.user.id);
+  ok(ctx.res, list.map((x) => ({ id: x.id, type: x.type, title: x.title, url: '/s/' + x.token, status: x.status,
+    views: x.views, createdAt: x.createdAt, image: x.status === 'active' ? store.urlOf(x.imagePath) : null })));
+});
+
+on('POST', '/api/shares/:id/revoke', async (ctx) => {
+  const share = await repo.shares.byId(ctx.params.id);
+  if (!share) return fail(ctx.res, 3012, '分享不存在');
+  if (ctx.user.role === 'student' && share.studentId !== ctx.user.id) return fail(ctx.res, 403, '只能撤回自己的分享');
+  await repo.shares.revoke(share.id);
+  await store.remove(share.imagePath);                 // 撤回后分享图一并删除
+  ok(ctx.res, { ok: true });
+});
+
+const GRADES = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级', '初一', '初二', '初三', '其他'];
+const leadHits = new Map();                             // 简单的按 IP 限流：每小时 5 次
+
+on('POST', '/api/public/leads', async (ctx) => {
+  const b = ctx.body;
+  const phone = String(b.phone || '').replace(/\s|-/g, '');
+  if (!/^1[3-9]\d{9}$/.test(phone)) return fail(ctx.res, 1001, '请填写正确的 11 位手机号');
+  if (!GRADES.includes(b.grade)) return fail(ctx.res, 1001, '请选择孩子年级');
+  if (!b.agree) return fail(ctx.res, 1001, '请勾选同意机构老师联系您');
+  const codes = (await repo.subjects.all()).map((x) => x.code);
+  const subjects = (Array.isArray(b.subjects) ? b.subjects : []).filter((c) => codes.includes(c));
+
+  const ip = String(ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '').split(',')[0].trim();
+  const nowMs = Date.now();
+  const hits = (leadHits.get(ip) || []).filter((t) => nowMs - t < 3600e3);
+  if (hits.length >= 5) return fail(ctx.res, 429, '提交太频繁了，请稍后再试');
+  hits.push(nowMs); leadHits.set(ip, hits);
+
+  const tenMinAgo = new Date(nowMs - 600e3).toISOString().replace('T', ' ').slice(0, 19);
+  if (await repo.leads.recentByPhone(phone, tenMinAgo)) return ok(ctx.res, { ok: true, duplicate: true });  // 连点提交不重复记录
+
+  let share = null;
+  if (b.token) { share = await repo.shares.byToken(b.token); if (share && share.status !== 'active') share = null; }
+  await repo.leads.create({
+    shareId: share ? share.id : null, refStudentId: share ? share.studentId : null,
+    source: share ? 'share' : (b.source === 'gallery' ? 'gallery' : 'trial'),
+    phone, grade: b.grade, subjects, contactTime: String(b.contactTime || '').slice(0, 50), ip,
+  });
+  ok(ctx.res, { ok: true });
+}, { auth: false });
+
+on('GET', '/api/admin/leads', async (ctx) => {
+  const subs = await repo.subjects.all();
+  const list = await repo.leads.list();
+  ok(ctx.res, list.map((l) => ({ ...l, subjectNames: l.subjects.map((c) => (subs.find((x) => x.code === c) || {}).name).filter(Boolean) })));
+}, { roles: ['teacher', 'admin'] });
+
+on('PUT', '/api/admin/leads/:id', async (ctx) => {
+  const status = ctx.body.status;
+  if (status && !['new', 'contacted', 'enrolled', 'invalid'].includes(status)) return fail(ctx.res, 1001, '状态不对');
+  await repo.leads.update(ctx.params.id, { status, note: ctx.body.note });
+  ok(ctx.res, { ok: true });
+}, { roles: ['teacher', 'admin'] });
+
+on('DELETE', '/api/admin/leads/:id', async (ctx) => {
+  await repo.leads.remove(ctx.params.id);
+  ok(ctx.res, { ok: true });
+}, { roles: ['teacher', 'admin'] });
+
+on('GET', '/api/admin/promo-stats', async (ctx) => {
+  const since = new Date(Date.now() - 7 * 86400e3).toISOString().replace('T', ' ').slice(0, 19);
+  const s = await repo.shares.stats(since);
+  ok(ctx.res, { last7: { shares: s.recentShares, views: s.recentViews, leads: await repo.leads.countSince(since) },
+    activeShares: s.activeShares, newLeads: await repo.leads.countNew(), top: s.top });
+}, { roles: ['teacher', 'admin'] });
+
 /* ---------- 分发 ---------- */
 function match(method, parts) {
   for (const r of routes) {
@@ -515,7 +854,8 @@ async function handleApi(req, res, pathname) {
     try { body = await readBody(req); } catch (e) { return fail(res, 1002, '请求体错误: ' + e.message); }
   }
   try {
-    await route.handler({ req, res, user, params, body });
+    const query = Object.fromEntries(new URL(req.url, 'http://x').searchParams);
+    await route.handler({ req, res, user, params, body, query });
   } catch (e) {
     // repo 抛出的业务异常带 code，按业务错误返回；其余才算服务端错误
     if (Number.isInteger(e.code) && e.code >= 1000 && e.code < 6000) return fail(res, e.code, e.message);
@@ -524,4 +864,4 @@ async function handleApi(req, res, pathname) {
   }
 }
 
-module.exports = { handleApi, CHECKIN_SECONDS };
+module.exports = { handleApi, CHECKIN_SECONDS, maskName };

@@ -164,6 +164,109 @@ const TAG = '__e2e_' + Date.now();
   const forbid = await expectFail('POST', '/api/admin/books', { title: 'x' }, S.token);
   check('学生不能建教材', /无权限/.test(forbid || ''), forbid);
 
+  log('\n[8] 多科目题目作业');
+  const JPG = '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
+  const subj = await call('GET', '/api/subjects', null, T.token);
+  const math = subj.subjects.find((x) => x.code === 'math');
+  const calli = subj.subjects.find((x) => x.code === 'calli');
+  check('四个科目', ['en', 'zh', 'math', 'calli'].every((c) => subj.subjects.some((x) => x.code === c)), subj.subjects.map((x) => x.name).join('、'));
+
+  const badQ = await expectFail('POST', '/api/homeworks/questions', { classId: cls.id, subjectId: math.id, title: TAG + ' 坏题',
+    questions: [{ type: 'single', score: 2, stem: '1+1', options: ['1', '2'] }] }, T.token);
+  check('出题校验：没标正确选项被拒', /正确选项/.test(badQ || ''), badQ);
+
+  const qhw = await call('POST', '/api/homeworks/questions', { classId: cls.id, subjectId: math.id, title: TAG + ' 数学练习', note: '认真写过程',
+    questions: [
+      { type: 'single', score: 2, stem: '1+1=?', options: ['1', '2', '3'], answer: 1, analysis: '一加一等于二' },
+      { type: 'multi', score: 2, stem: '哪些是偶数', options: ['2', '3', '4'], answer: [0, 2] },
+      { type: 'judge', score: 1, stem: '0 是自然数', answer: true },
+      { type: 'blank', score: 2, stem: '圆周率约等于 ___，3×4=___', answer: { blanks: [['3.14'], ['12']], tolerance: 0.01 } },
+      { type: 'photo', score: 3, stem: '写出计算过程并拍照', stemImageBase64: JPG },
+    ] }, T.token);
+  const sView = await call('GET', `/api/homeworks/${qhw.id}`, null, S.token);
+  check('学生看到题目但看不到答案', sView.questions.length === 5 && sView.questions.every((x) => x.answer === undefined)
+    && sView.subject.code === 'math' && !!sView.questions[4].stemImage, `${sView.subject.name} ${sView.questions.length} 题`);
+
+  const noPhoto = await expectFail('POST', `/api/homeworks/${qhw.id}/answers`, { answers: [
+    { questionId: sView.questions[0].id, value: 1 } ] }, S.token);
+  check('拍照题没交照片被拒绝', /还没有拍照/.test(noPhoto || ''), noPhoto);
+
+  const ids = sView.questions.map((x) => x.id);
+  const res1 = await call('POST', `/api/homeworks/${qhw.id}/answers`, { answers: [
+    { questionId: ids[0], value: 1 }, { questionId: ids[1], value: [0] }, { questionId: ids[2], value: true },
+    { questionId: ids[3], value: ['3.1416', '１２'] }, { questionId: ids[4], photos: [JPG] } ] }, S.token);
+  check('客观题自动评分：单选对 2 + 多选少选 0 + 判断对 1 + 填空全对 2 = 5 分', res1.score === 5 && res1.maxScore === 10 && res1.status === 'submitted' && res1.pending === 1,
+    `${res1.score}/${res1.maxScore} 待批改 ${res1.pending} 题`);
+
+  const tSubs = await call('GET', `/api/homeworks/${qhw.id}/submissions`, null, T.token);
+  const qRow = tSubs.rows.find((r) => r.submissionId);
+  const photoAns = qRow.answers.find((a) => a.questionId === ids[4]);
+  check('老师看到学生照片', photoAns && photoAns.assets.length === 1 && /\/files\/photos\//.test(photoAns.assets[0].url), photoAns && photoAns.assets[0].url);
+  const over = await expectFail('POST', `/api/submissions/${qRow.submissionId}/grade`, { scores: [{ answerId: photoAns.id, score: 9 }] }, T.token);
+  check('主观题打分超过满分被拒', /0–3 分/.test(over || ''), over);
+  const graded = await call('POST', `/api/submissions/${qRow.submissionId}/grade`, { scores: [{ answerId: photoAns.id, score: 3, comment: '过程清楚' }],
+    reviewText: '书写工整，思路清楚', excellent: true }, T.token);
+  check('老师给拍照题 3 分后总分 8/10、4 星', graded.score === 8 && graded.maxScore === 10 && graded.stars === 4, `${graded.score}/${graded.maxScore} ★${graded.stars}`);
+  const sAfter = await call('GET', `/api/homeworks/${qhw.id}`, null, S.token);
+  check('批改后学生能看到答案、解析和优秀', sAfter.mySubmission.excellent && sAfter.questions[0].answer === 1 && sAfter.questions[0].analysis === '一加一等于二',
+    `优秀=${sAfter.mySubmission.excellent}`);
+
+  const allAuto = await call('POST', '/api/homeworks/questions', { classId: cls.id, subjectId: math.id, title: TAG + ' 口算',
+    questions: [{ type: 'blank', score: 5, stem: '7×8=___', answer: { blanks: [['56']] } }] }, T.token);
+  const autoV = await call('GET', `/api/homeworks/${allAuto.id}`, null, S.token);
+  const autoR = await call('POST', `/api/homeworks/${allAuto.id}/answers`, { answers: [{ questionId: autoV.questions[0].id, value: ['56'] }] }, S.token);
+  check('全是客观题：提交即批改完成', autoR.status === 'reviewed' && autoR.score === 5, `${autoR.status} ${autoR.score}`);
+
+  log('\n[9] 喜报、作品展、预约试听');
+  const PRAISE = JPG;
+  const share = await call('POST', '/api/shares', { type: 'praise', submissionId: qRow.submissionId, imageBase64: PRAISE }, S.token);
+  const pageR = await fetch(BASE + share.url);
+  const html = await pageR.text();
+  check('喜报分享页：卡片标题带打码姓名、og:image 是完整地址', pageR.status === 200 && /李\*/.test(html) && /property="og:image" content="https?:\/\/[^"]+\/files\/shares\//.test(html),
+    (html.match(/<title>[^<]*<\/title>/) || [''])[0]);
+  const cookie = (pageR.headers.get('set-cookie') || '').split(';')[0];
+  await fetch(BASE + share.url, { headers: { cookie } });
+  const mine = await call('GET', '/api/shares/mine', null, S.token);
+  check('同一访客重复打开只计 1 次浏览', mine.find((x) => x.id === share.id).views === 1, `浏览 ${mine.find((x) => x.id === share.id).views}`);
+
+  const notExcellent = await expectFail('POST', '/api/shares', { type: 'praise', submissionId: autoR.submissionId, imageBase64: PRAISE }, S.token);
+  check('没被评优秀不能生成喜报', /优秀作业/.test(notExcellent || ''), notExcellent);
+
+  const chw = await call('POST', '/api/homeworks/questions', { classId: cls.id, subjectId: calli.id, title: TAG + ' 书法',
+    questions: [{ type: 'photo', score: 10, stem: '临写"永"字八法' }] }, T.token);
+  const cv = await call('GET', `/api/homeworks/${chw.id}`, null, S.token);
+  const cr = await call('POST', `/api/homeworks/${chw.id}/answers`, { answers: [{ questionId: cv.questions[0].id, photos: [JPG, JPG] }] }, S.token);
+  const cSubs = await call('GET', `/api/homeworks/${chw.id}/submissions`, null, T.token);
+  const cRow = cSubs.rows.find((r) => r.submissionId);
+  await call('POST', `/api/submissions/${cRow.submissionId}/grade`, { scores: [{ answerId: cRow.answers[0].id, score: 9 }], reviewText: '笔画有力', excellent: true }, T.token);
+  const work = await call('POST', '/api/shares', { type: 'work', submissionId: cr.submissionId, imageBase64: PRAISE, showFullName: true }, S.token);
+  const gal = await (await fetch(BASE + '/gallery')).text();
+  check('书法作品进入作品展，并显示全名（家长选择了显示全名）', gal.includes('/s/' + work.url.split('/').pop()) && gal.includes('李小明'), work.url);
+
+  const badLead = await expectFail('POST', '/api/public/leads', { token: work.url.split('/').pop(), phone: '12345', grade: '三年级', agree: true });
+  check('预约：手机号格式不对被拒', /手机号/.test(badLead || ''), badLead);
+  const noAgree = await expectFail('POST', '/api/public/leads', { phone: '13800001111', grade: '三年级', agree: false });
+  check('预约：没勾同意被拒', /同意/.test(noAgree || ''), noAgree);
+  const phone = '1380000' + String(Date.now()).slice(-4);
+  await call('POST', '/api/public/leads', { token: work.url.split('/').pop(), phone, grade: '三年级', subjects: ['calli', 'bogus'], contactTime: '周末', agree: true });
+  const dupLead = await call('POST', '/api/public/leads', { token: work.url.split('/').pop(), phone, grade: '三年级', agree: true });
+  const leadsList = await call('GET', '/api/admin/leads', null, T.token);
+  const myLead = leadsList.filter((l) => l.phone === phone);
+  check('预约记录带来源学生、只保留合法科目、重复提交不重复记', myLead.length === 1 && myLead[0].refName === '李小明'
+    && JSON.stringify(myLead[0].subjects) === '["calli"]' && dupLead.duplicate === true, myLead[0] && `${myLead[0].refName} ${myLead[0].subjectNames}`);
+  const stats = await call('GET', '/api/admin/promo-stats', null, T.token);
+  check('宣传数据', stats.last7.shares >= 2 && stats.last7.leads >= 1, JSON.stringify(stats.last7));
+
+  await call('POST', `/api/shares/${share.id}/revoke`, null, S.token);
+  const revoked = await fetch(BASE + share.url);
+  const imgGone = await fetch(BASE + '/files/shares/' + share.url.split('/').pop() + '.jpg');
+  check('撤回后分享页 404、分享图被删', revoked.status === 404 && imgGone.status === 404, `页面 ${revoked.status} 图片 ${imgGone.status}`);
+
+  // 清理本段数据
+  for (const l of myLead) await call('DELETE', `/api/admin/leads/${l.id}`, null, T.token);
+  await call('POST', `/api/shares/${work.id}/revoke`, null, S.token);
+  for (const id of [qhw.id, allAuto.id, chw.id]) await call('DELETE', `/api/homeworks/${id}`, null, T.token);
+
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);
   check('有作业时拒绝删教材', /还有作业/.test(guarded || ''), guarded);

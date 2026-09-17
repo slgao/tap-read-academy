@@ -1,0 +1,210 @@
+'use strict';
+/**
+ * 对外公开的宣传页（不需要登录），服务端直接渲染 HTML：
+ *   /s/<token>  单个喜报或作品，底部带预约试听
+ *   /gallery    书法作品展：被评为优秀、且仍在分享中的书法作品
+ *   /trial      预约试听
+ *
+ * 为什么服务端渲染：微信取分享卡片的标题、说明、缩略图时，读的是页面里的 meta 标签，
+ * 每个分享都要带上自己的标题和图片，必须在页面源码里就写好。
+ */
+const crypto = require('node:crypto');
+const repo = require('./repo');
+const store = require('./storage');
+
+const SCHOOL = '福斯特培训学校';
+
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function originOf(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http')).split(',')[0].trim();
+  return `${proto}://${req.headers.host}`;
+}
+
+function visitorId(req, res) {
+  const m = /(?:^|;\s*)trv=([a-f0-9]{24})/.exec(req.headers.cookie || '');
+  if (m) return m[1];
+  const id = crypto.randomBytes(12).toString('hex');
+  const secure = originOf(req).startsWith('https') ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `trv=${id}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${secure}`);
+  return id;
+}
+
+function page(req, { title, description, image, body, bodyClass = '' }) {
+  const origin = originOf(req);
+  const img = image ? (image.startsWith('http') ? image : origin + image) : origin + '/brand/share-500.jpg';
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>${esc(title)}</title>
+<meta name="description" content="${esc(description)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${SCHOOL}">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(description)}">
+<meta property="og:image" content="${esc(img)}">
+<meta itemprop="name" content="${esc(title)}">
+<meta itemprop="description" content="${esc(description)}">
+<meta itemprop="image" content="${esc(img)}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="${esc(img)}">
+<link rel="icon" type="image/png" href="/brand/favicon-48.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body class="pub ${bodyClass}">
+<div hidden aria-hidden="true"><img src="${esc(img)}" alt="" width="500" height="500"></div>
+<div id="app" class="pub-app">
+  <header class="pub-head">
+    <img src="/brand/logo-96.png" alt="" width="36" height="36">
+    <div><div class="pub-school">${SCHOOL}</div><div class="pub-en">FIRST TRAINING SCHOOL</div></div>
+  </header>
+  <main class="pub-main">${body}</main>
+</div>
+<div id="toast"></div>
+<script src="/public-page.js"></script>
+</body>
+</html>`;
+}
+
+async function subjectChips(selected) {
+  const subs = await repo.subjects.all();
+  return subs.map((x) => `<label class="chip ${x.color}"><input type="checkbox" name="subjects" value="${esc(x.code)}"${selected.includes(x.code) ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('');
+}
+
+async function leadForm({ token = '', source = 'share', subjectCode = '' }) {
+  const grades = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级', '初一', '初二', '初三', '其他'];
+  return `
+  <section class="card pub-form" id="trial">
+    <h2 class="section-title">想让孩子也来试试？</h2>
+    <p class="muted">留下联系方式，${SCHOOL}的老师会联系您安排一节试听课。</p>
+    <form id="lead-form" data-token="${esc(token)}" data-source="${esc(source)}" novalidate>
+      <label class="field"><span>孩子年级</span>
+        <select name="grade" required><option value="">请选择</option>${grades.map((g) => `<option>${g}</option>`).join('')}</select></label>
+      <div class="field"><span>想了解的科目</span><div class="chips">${await subjectChips(subjectCode ? [subjectCode] : [])}</div></div>
+      <label class="field"><span>家长手机号</span><input name="phone" type="tel" inputmode="numeric" maxlength="13" placeholder="11 位手机号" autocomplete="tel"></label>
+      <label class="field"><span>方便联系的时间</span>
+        <select name="contactTime"><option>都可以</option><option>工作日白天</option><option>工作日晚上</option><option>周末</option></select></label>
+      <label class="agree"><input type="checkbox" name="agree"> <span>同意${SCHOOL}的老师通过电话联系我。手机号只用于预约试听，不会给其他人。</span></label>
+      <button class="btn block" type="submit">预约试听</button>
+    </form>
+    <div class="pub-done" hidden><b>已收到预约</b><p class="muted">老师会尽快联系您，请留意来电。</p></div>
+  </section>`;
+}
+
+function notFound(req, res, msg) {
+  const html = page(req, {
+    title: `${SCHOOL}`, description: '点读课文、英语听力、各科作业、每日打卡',
+    body: `<section class="card center"><h2 class="section-title">${esc(msg)}</h2>
+      <p class="muted">可以看看其他同学的作品，或者预约一节试听课。</p>
+      <p><a class="btn ghost" href="/gallery">书法作品展</a> <a class="btn" href="/trial">预约试听</a></p></section>`,
+  });
+  send(res, 404, html);
+}
+
+function send(res, code, html) {
+  const buf = Buffer.from(html);
+  res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': buf.length, 'Cache-Control': 'no-cache' });
+  res.end(buf);
+}
+
+async function sharePage(req, res, url, token) {
+  const share = await repo.shares.byToken(token);
+  if (!share) return notFound(req, res, '没有找到这个分享');
+  if (share.status !== 'active') return notFound(req, res, '这个分享已经被家长撤回了');
+
+  const guide = url.searchParams.get('guide') === '1';
+  if (!guide) {
+    const v = visitorId(req, res);
+    await repo.shares.addView(share.id, v);                 // 分享者自己第一次打开（带 guide）不计入浏览
+  }
+  const subject = share.subjectId ? await repo.subjects.byId(share.subjectId) : null;
+  const img = store.urlOf(share.imagePath);
+  const photos = [];
+  for (const id of share.photoIds) { const a = await repo.assets.byId(id); if (a) photos.push(store.urlOf(a.relPath)); }
+
+  const isWork = share.type === 'work';
+  const desc = share.comment ? `老师评语：${share.comment}` : (isWork ? '来看看孩子的书法作品' : '孩子的作业被评为优秀');
+  const body = `
+    <section class="pub-hero">
+      <img class="pub-poster" src="${esc(img)}" alt="${esc(share.title)}">
+    </section>
+    ${isWork && photos.length ? `<section class="card">
+      <h2 class="section-title">作品原图</h2>
+      <div class="pub-photos">${photos.map((u) => `<button class="pub-photo" data-src="${esc(u)}"><img src="${esc(u)}" alt="作品照片" loading="lazy"></button>`).join('')}</div>
+    </section>` : ''}
+    ${share.comment ? `<section class="card"><h2 class="section-title">老师评语</h2>
+      <p class="pub-comment">${esc(share.comment)}</p>
+      ${share.stars ? `<div class="stars">${'★'.repeat(share.stars)}<span class="off">${'★'.repeat(5 - share.stars)}</span></div>` : ''}</section>` : ''}
+    <section class="card pub-links">
+      <a class="btn ghost block" href="/gallery">看看更多书法作品</a>
+    </section>
+    ${await leadForm({ token: share.token, source: 'share', subjectCode: subject ? subject.code : '' })}
+    ${guide ? `<div class="share-guide" id="share-guide" role="dialog" aria-label="分享方法">
+        <div class="arrow"></div>
+        <div class="tip"><b>点右上角「···」</b><br>选「发送给朋友」或「分享到朋友圈」</div>
+        <button class="btn star" data-close-guide>知道了</button>
+      </div>` : ''}`;
+  send(res, 200, page(req, { title: `${share.title} · ${SCHOOL}`, description: desc, image: img, body }));
+}
+
+async function galleryPage(req, res) {
+  const calli = await repo.subjects.byCode('calli');
+  const works = [];
+  for (const s of calli ? await repo.shares.gallery(calli.id) : []) {
+    const sub = s.submissionId ? await repo.submissions.byId(s.submissionId) : null;
+    if (!sub || !sub.excellent) continue;                  // 作品展只展示老师评为优秀的
+    const a = s.photoIds.length ? await repo.assets.byId(s.photoIds[0]) : null;
+    if (!a) continue;
+    works.push({ token: s.token, title: s.title, photo: store.urlOf(a.relPath), comment: s.comment });
+  }
+  const body = `
+    <section class="pub-intro">
+      <h1>书法作品展</h1>
+      <p class="muted">${SCHOOL}同学们的优秀书法作品，每一幅都经过老师点评。</p>
+    </section>
+    ${works.length ? `<section class="pub-grid">${works.map((w) => `
+      <a class="pub-work" href="/s/${esc(w.token)}">
+        <img src="${esc(w.photo)}" alt="${esc(w.title)}" loading="lazy">
+        <b>${esc(w.title.replace(/的书法作品$/, ''))}</b>
+        ${w.comment ? `<span>${esc(w.comment.slice(0, 26))}${w.comment.length > 26 ? '…' : ''}</span>` : ''}
+      </a>`).join('')}</section>`
+    : `<section class="card center"><p class="muted">作品正在陆续上墙，过几天再来看看。</p></section>`}
+    ${await leadForm({ source: 'gallery', subjectCode: 'calli' })}`;
+  send(res, 200, page(req, {
+    title: `书法作品展 · ${SCHOOL}`, description: `${SCHOOL}同学们的优秀书法作品`,
+    image: works[0] ? works[0].photo : null, body,
+  }));
+}
+
+async function trialPage(req, res) {
+  const body = `
+    <section class="pub-intro">
+      <h1>预约试听</h1>
+      <p class="muted">英语、语文、数学、书法，留下联系方式，老师为孩子安排一节试听课。</p>
+    </section>
+    ${await leadForm({ source: 'trial' })}`;
+  send(res, 200, page(req, { title: `预约试听 · ${SCHOOL}`, description: '英语、语文、数学、书法，预约一节试听课', body }));
+}
+
+/** 返回 true 表示已处理 */
+async function handlePublic(req, res, url) {
+  const p = url.pathname;
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  try {
+    const m = /^\/s\/([a-f0-9]{20})\/?$/.exec(p);
+    if (m) { await sharePage(req, res, url, m[1]); return true; }
+    if (p === '/s' || p.startsWith('/s/')) { notFound(req, res, '没有找到这个分享'); return true; }
+    if (p === '/gallery') { await galleryPage(req, res); return true; }
+    if (p === '/trial') { await trialPage(req, res); return true; }
+  } catch (e) {
+    console.error('[public error]', p, e);
+    send(res, 500, '<p>页面暂时打不开，请稍后再试</p>');
+    return true;
+  }
+  return false;
+}
+
+module.exports = { handlePublic, esc };

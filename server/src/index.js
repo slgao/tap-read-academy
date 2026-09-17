@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ROOT, CONTENT_DIR } = require('./db');
 const { handleApi } = require('./api');
+const { handlePublic } = require('./public');
 
 const PORT = Number(process.env.PORT) || 3000;
 // 公网部署时设 HOST=127.0.0.1，只让反向代理（Caddy）访问；本地开发不设，监听所有网卡
@@ -63,6 +64,9 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   if (p.startsWith('/api/')) return handleApi(req, res, p);
+  if (p === '/gallery' || p === '/trial' || p === '/s' || p.startsWith('/s/')) {
+    if (await handlePublic(req, res, url)) return;
+  }
   if (p.startsWith('/files/')) return serveStatic(req, res, CONTENT_DIR, p.slice('/files/'.length));
   if (p === '/') return serveStatic(req, res, WEB_DIR, 'index.html');
   return serveStatic(req, res, WEB_DIR, p);

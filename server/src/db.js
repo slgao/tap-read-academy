@@ -11,6 +11,9 @@ fs.mkdirSync(path.join(CONTENT_DIR, 'pages'), { recursive: true });
 fs.mkdirSync(path.join(CONTENT_DIR, 'audio'), { recursive: true });
 fs.mkdirSync(path.join(CONTENT_DIR, 'rec'), { recursive: true });
 fs.mkdirSync(path.join(CONTENT_DIR, 'posters'), { recursive: true });
+fs.mkdirSync(path.join(CONTENT_DIR, 'shares'), { recursive: true });
+fs.mkdirSync(path.join(CONTENT_DIR, 'photos'), { recursive: true });
+fs.mkdirSync(path.join(CONTENT_DIR, 'stems'), { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
 db.exec('PRAGMA journal_mode = WAL');
@@ -153,5 +156,114 @@ CREATE INDEX IF NOT EXISTS idx_hotspot_page ON hotspots(page_id, sort);
 CREATE INDEX IF NOT EXISTS idx_page_lesson ON pages(lesson_id, sort);
 CREATE INDEX IF NOT EXISTS idx_hw_class ON homeworks(class_id, created_at);
 `);
+
+/* ---------- 多科目作业与宣传（在线上已有数据的库上增量升级） ---------- */
+db.exec(`
+CREATE TABLE IF NOT EXISTS subjects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE NOT NULL,         -- en | zh | math | calli
+  name TEXT NOT NULL,
+  color TEXT,                        -- 前端配色键：sky | coral | mint | star
+  sort INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS teacher_subjects (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  subject_id INTEGER NOT NULL REFERENCES subjects(id),
+  PRIMARY KEY (user_id, subject_id)
+);
+
+-- 题目作业里的题：single 单选 | multi 多选 | judge 判断 | blank 填空（自动评分）
+--                photo 拍照 | text 文字 | audio 录音（老师批改）
+CREATE TABLE IF NOT EXISTS questions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  homework_id INTEGER NOT NULL REFERENCES homeworks(id) ON DELETE CASCADE,
+  sort INTEGER DEFAULT 0,
+  type TEXT NOT NULL,
+  stem TEXT,
+  stem_image_id INTEGER REFERENCES assets(id),
+  options TEXT,                      -- JSON：选项文字数组
+  answer TEXT,                       -- JSON：标准答案（学生提交前不下发）
+  score REAL DEFAULT 1,
+  analysis TEXT
+);
+
+CREATE TABLE IF NOT EXISTS answers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  submission_id INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+  question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  value TEXT,                        -- JSON：学生作答
+  asset_ids TEXT,                    -- JSON：照片/录音资产
+  auto_correct INTEGER,              -- 1 对 / 0 错 / NULL 需老师批改
+  score REAL,
+  comment TEXT,
+  UNIQUE (submission_id, question_id)
+);
+
+-- 分享：喜报 praise | 作品 work
+CREATE TABLE IF NOT EXISTS shares (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT UNIQUE NOT NULL,
+  type TEXT NOT NULL,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL,
+  subject_id INTEGER REFERENCES subjects(id),
+  title TEXT,
+  image_path TEXT,                   -- 分享卡片与页面主图（相对 content/）
+  photo_ids TEXT,                    -- JSON：作品原图资产
+  comment TEXT,
+  stars INTEGER,
+  show_full_name INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'active',      -- active | revoked
+  views INTEGER DEFAULT 0,
+  created_at TEXT,
+  revoked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS share_views (
+  share_id INTEGER NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
+  visitor TEXT NOT NULL,
+  first_at TEXT,
+  PRIMARY KEY (share_id, visitor)
+);
+
+CREATE TABLE IF NOT EXISTS leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  share_id INTEGER REFERENCES shares(id) ON DELETE SET NULL,
+  ref_student_id INTEGER REFERENCES users(id),
+  source TEXT,                       -- share | gallery | trial
+  phone TEXT NOT NULL,
+  grade TEXT,
+  subjects TEXT,                     -- JSON
+  contact_time TEXT,
+  status TEXT DEFAULT 'new',         -- new | contacted | enrolled | invalid
+  note TEXT,
+  ip TEXT,
+  created_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_q_hw ON questions(homework_id, sort);
+CREATE INDEX IF NOT EXISTS idx_share_student ON shares(student_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at);
+`);
+
+/** 已有表加列：线上库已有数据，不能重建表 */
+function addColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+addColumn('homeworks', 'subject_id', 'INTEGER REFERENCES subjects(id)');
+addColumn('homeworks', 'kind', "TEXT DEFAULT 'follow_read'");   // follow_read 课本跟读 | questions 题目作业
+addColumn('submissions', 'score', 'REAL');
+addColumn('submissions', 'max_score', 'REAL');
+addColumn('submissions', 'excellent', 'INTEGER DEFAULT 0');
+
+const SUBJECTS = [['en', '英语', 'sky', 1], ['zh', '语文', 'coral', 2], ['math', '数学', 'mint', 3], ['calli', '书法', 'star', 4]];
+const insSubject = db.prepare('INSERT OR IGNORE INTO subjects (code, name, color, sort) VALUES (?,?,?,?)');
+for (const row of SUBJECTS) insSubject.run(...row);
+// 升级前的作业都是英语课本跟读
+const en = db.prepare("SELECT id FROM subjects WHERE code='en'").get();
+db.prepare('UPDATE homeworks SET subject_id=? WHERE subject_id IS NULL').run(en.id);
+db.prepare("UPDATE homeworks SET kind='follow_read' WHERE kind IS NULL").run();
 
 module.exports = { db, ROOT, DATA_DIR, CONTENT_DIR };

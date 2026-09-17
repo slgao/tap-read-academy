@@ -1,7 +1,7 @@
 /* 学生端 —— 这一份 H5 的交互与数据流，与 miniprogram/ 下的小程序版本一一对应 */
 (function () {
   'use strict';
-  const { Store, API, toast, esc, fmtDate, starStr, Player, Rec, Clip } = App;
+  const { Store, API, toast, esc, fmtDate, starStr, Player, Rec, Clip, compressImage, maskName, subjTag, TYPE_NAME, lightbox, LETTER, fmtAnswer, fmtKey, fmtNum } = App;
   const $view = document.getElementById('view');
   const $top = document.getElementById('topbar');
   const $tab = document.getElementById('tabbar');
@@ -24,7 +24,7 @@
   const ic = (name, cls = 'i') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name] || ''}</svg>`;
 
   /** 等级：按星星数，给初中生也留出追求的目标 */
-  const LEVELS = [[0, '新芽'], [50, '小书虫'], [150, '阅读之星'], [300, '英语达人'], [600, '学霸']];
+  const LEVELS = [[0, '新芽'], [50, '小书虫'], [150, '阅读之星'], [300, '学习达人'], [600, '学霸']];
   function levelOf(stars) {
     let i = 0; while (i < LEVELS.length - 1 && stars >= LEVELS[i + 1][0]) i++;
     const next = LEVELS[i + 1];
@@ -50,7 +50,7 @@
     document.getElementById('app').appendChild(m);
   }
 
-  const S = { view: 'home', book: null, catalog: null, page: null, hw: null, showHs: false, repeat: false, recs: {} };
+  const S = { view: 'home', book: null, catalog: null, page: null, hw: null, showHs: false, repeat: false, recs: {}, ans: {}, subj: '' };
   let accum = 0, pending = 0;
 
   /* ---------- 学习时长心跳 ---------- */
@@ -106,6 +106,30 @@
     const a = e.target.closest('[data-act]');
     if (a) { (ACT[a.dataset.act] || (() => {}))(a); }
   });
+  document.addEventListener('input', (e) => {
+    const el = e.target;
+    if (el.dataset.qaText) S.ans[el.dataset.qaText] = { value: el.value };
+    if (el.dataset.qaBlank) {
+      const st = S.ans[el.dataset.qaBlank] || (S.ans[el.dataset.qaBlank] = { value: [] });
+      if (!Array.isArray(st.value)) st.value = [];
+      st.value[Number(el.dataset.k)] = el.value;
+    }
+  });
+  document.addEventListener('change', async (e) => {
+    const el = e.target;
+    if (el.dataset.qaPhoto) {
+      const qid = el.dataset.qaPhoto;
+      const st = S.ans[qid] || (S.ans[qid] = { photos: [] });
+      st.photos = st.photos || [];
+      const files = [...(el.files || [])].slice(0, 6 - st.photos.length);
+      if (el.files.length > files.length) toast('每题最多 6 张照片');
+      for (const f of files) {
+        try { st.photos.push(await compressImage(f)); } catch (err) { toast(err.message); }
+      }
+      redrawQ(qid);
+    }
+    if (el.id === 'sh-full') drawSharePreview();
+  });
 
   /* ---------- 登录 ---------- */
   const LOGIN = {
@@ -116,7 +140,7 @@
         <img src="brand/logo-192.png" alt="福斯特培训学校校徽">
         <div class="name">福斯特培训学校</div>
         <div class="en">FIRST TRAINING SCHOOL</div>
-        <div class="tag"><span style="background:var(--sky-wash);color:var(--sky-shade)">点读课文</span><span style="background:var(--mint-wash);color:var(--mint-shade)">英语听力</span><span style="background:var(--coral-wash);color:var(--coral-shade)">跟读作业</span><span style="background:var(--star-wash);color:#8A5A00">每日打卡</span></div>
+        <div class="tag"><span style="background:var(--sky-wash);color:var(--sky-shade)">点读课文</span><span style="background:var(--mint-wash);color:var(--mint-shade)">英语听力</span><span style="background:var(--coral-wash);color:var(--coral-shade)">各科作业</span><span style="background:var(--star-wash);color:#8A5A00">每日打卡</span></div>
       </div>
       <div class="card">
         <label class="field"><span>姓名</span><input id="i-name" placeholder="例如：李小明" value="李小明" autocomplete="name"></label>
@@ -176,7 +200,7 @@
         ${todo.slice(0, 3).map((h, i) => `
           <div class="listitem" data-go="hwdetail" data-arg='${JSON.stringify({ hwId: h.id })}'>
             <div class="n">${i + 1}</div>
-            <div class="grow"><div class="strong ellip">${esc(h.title)}</div><div class="muted small">${h.itemCount} 句 · ${esc(h.className)}</div></div>
+            <div class="grow"><div class="strong ellip">${esc(h.title)}</div><div class="muted small">${hwMeta(h)} · ${esc(h.className)}</div></div>
             <span class="muted">›</span>
           </div>`).join('')}
       </div>` : ''}`;
@@ -295,19 +319,31 @@
   };
 
   /* ---------- 作业列表 ---------- */
+  const hwMeta = (h) => (h.kind === 'questions' ? `${h.itemCount} 道题` : `${h.itemCount} 句跟读`);
   const HWLIST = {
     top: () => `<h1><img src="brand/logo-96.png" alt="">作业</h1>`,
     tab: true,
     body: async () => {
-      const hws = await API.get('/api/homeworks');
-      if (!hws.length) return `<div class="empty">还没有作业</div>`;
+      const all = await API.get('/api/homeworks');
+      if (!all.length) return `<div class="empty">还没有作业</div>`;
+      const subs = [];
+      all.forEach((h) => { if (h.subject && !subs.some((x) => x.code === h.subject.code)) subs.push(h.subject); });
+      if (S.subj && !subs.some((x) => x.code === S.subj)) S.subj = '';
+      const hws = S.subj ? all.filter((h) => h.subject && h.subject.code === S.subj) : all;
       const P = { todo: ['todo', '待完成'], submitted: ['warn', '已提交'], reviewed: ['ok', '已批改'], rejected: ['todo', '需重做'] };
-      return hws.map((h) => {
+      const chips = subs.length > 1 ? `<div class="chips mb" role="tablist">
+          <button class="fchip ${S.subj ? '' : 'on'}" data-act="pickSubj" data-code="">全部</button>
+          ${subs.map((x) => `<button class="fchip ${esc(x.color)} ${S.subj === x.code ? 'on' : ''}" data-act="pickSubj" data-code="${esc(x.code)}">${esc(x.name)}</button>`).join('')}
+        </div>` : '';
+      return chips + hws.map((h) => {
         const [cls, txt] = P[h.status] || P.todo;
         return `<div class="hwitem" data-go="hwdetail" data-arg='${JSON.stringify({ hwId: h.id })}'>
-          <div class="row between"><div class="strong ellip grow">${esc(h.title)}</div><span class="pill ${cls}">${txt}</span></div>
-          <div class="muted small mt">${h.itemCount} 句跟读 · ${esc(h.className)} · ${fmtDate(h.createdAt)}</div>
-          ${h.status === 'reviewed' ? `<div class="mt row" style="gap:8px"><span class="stars">${starStr(h.stars)}</span><span class="muted small ellip">${esc(h.reviewText || '')}</span></div>` : ''}
+          <div class="row between"><div class="strong ellip grow">${subjTag(h.subject)}${esc(h.title)}</div><span class="pill ${cls}">${txt}</span></div>
+          <div class="muted small mt">${hwMeta(h)} · ${esc(h.className)} · ${fmtDate(h.createdAt)}</div>
+          ${h.status === 'reviewed' ? `<div class="mt row" style="gap:8px">
+            ${h.excellent ? '<span class="pill warn">优秀</span>' : ''}
+            ${h.kind === 'questions' && h.maxScore ? `<b class="score">${fmtNum(h.score)}<small>/${fmtNum(h.maxScore)}</small></b>` : `<span class="stars">${starStr(h.stars)}</span>`}
+            <span class="muted small ellip">${esc(h.reviewText || '')}</span></div>` : ''}
         </div>`;
       }).join('');
     },
@@ -320,6 +356,7 @@
     body: async () => {
       const hw = await API.get(`/api/homeworks/${S.hwId}`);
       S.hw = hw; S.recs = {};
+      if (hw.kind === 'questions') { $top.innerHTML = HWDETAIL.top(); return questionDetail(hw); }
       if (hw.mySubmission) (hw.mySubmission.items || []).forEach((it) => { S.recs[it.hotspotId] = { url: it.audio && it.audio.url, saved: true }; });
       $top.innerHTML = HWDETAIL.top();
       const done = hw.status === 'reviewed';
@@ -329,6 +366,7 @@
           <span class="pill ${done ? 'ok' : hw.status === 'submitted' ? 'warn' : 'todo'}">${done ? '已批改' : hw.status === 'submitted' ? '已提交' : '待完成'}</span></div>
           ${hw.note ? `<div class="mt small">老师说：${esc(hw.note)}</div>` : ''}
           ${done ? `<div class="hr"></div><div class="row" style="gap:8px"><span class="stars">${starStr(hw.stars)}</span><span class="small">${esc(hw.reviewText || '')}</span></div>` : ''}
+          ${done && hw.excellent ? `<div class="hr"></div><div class="row between"><span class="strong">被评为优秀作业</span><button class="btn sm star" data-act="shareOpen" data-type="praise">生成喜报</button></div>` : ''}
         </div>
         <div class="row between mb">
           <button class="btn sm ghost" data-act="hwOpenPage">打开课本页</button>
@@ -353,13 +391,296 @@
     </div>`;
   }
 
+
+  /* ---------- 题目作业 ---------- */
+  function questionDetail(hw) {
+    const sub = hw.mySubmission;
+    const st = hw.status;
+    S.editing = st === 'todo' || st === 'rejected' || (st === 'submitted' && S.editing === hw.id) ? hw.id : null;
+    const edit = !!S.editing;
+    S.ans = {};
+    if (edit) {
+      // 打回重做或重新作答时，把之前答过的客观题和文字带进来；照片和录音要重新拍、重新录
+      hw.questions.forEach((q) => {
+        const a = q.myAnswer;
+        if (a && (q.auto || q.type === 'text') && a.value != null) S.ans[q.id] = { value: a.value };
+      });
+    }
+    let head = '';
+    if (st === 'reviewed' && sub) {
+      const photo = hw.questions.some((q) => q.type === 'photo' && q.myAnswer && q.myAnswer.assets.length);
+      const calli = hw.subject && hw.subject.code === 'calli';
+      head = `<div class="card result ${sub.excellent ? 'excellent' : ''}">
+        <div class="row between">
+          <div><div class="bigscore">${fmtNum(sub.score)}<small> / ${fmtNum(sub.maxScore)} 分</small></div>
+            <span class="stars">${starStr(sub.stars)}</span></div>
+          ${sub.excellent ? '<div class="seal-ex" aria-label="优秀作业">优</div>' : ''}
+        </div>
+        ${sub.reviewText ? `<div class="teacher-say"><b>老师说</b>${esc(sub.reviewText)}</div>` : ''}
+        ${sub.excellent || (calli && photo) ? `<div class="row mt" style="gap:8px">
+          ${sub.excellent ? '<button class="btn sm star grow" data-act="shareOpen" data-type="praise">生成喜报</button>' : ''}
+          ${calli && photo ? '<button class="btn sm grow" data-act="shareOpen" data-type="work">分享书法作品</button>' : ''}
+        </div>` : ''}
+      </div>`;
+    } else if (st === 'submitted' && !edit) {
+      head = `<div class="card tight mb"><div class="strong">已提交，等老师批改</div>
+        <div class="muted small mt">${sub && sub.score ? `选择题、填空题已得 ${fmtNum(sub.score)} 分，` : ''}老师批改后能看到总分和评语</div>
+        <button class="btn sm ghost mt" data-act="qaRedo">重新作答</button></div>`;
+    } else if (st === 'rejected') {
+      head = `<div class="card tight mb warnbox"><div class="strong">老师让你重做</div>${sub && sub.reviewText ? `<div class="small mt">${esc(sub.reviewText)}</div>` : ''}</div>`;
+    }
+    return `
+      <div class="card tight mb">
+        <div class="row between"><span class="muted small">${subjTag(hw.subject)}${esc(hw.className)} · ${hw.questions.length} 道题</span>
+          <span class="pill ${st === 'reviewed' ? 'ok' : st === 'submitted' ? 'warn' : 'todo'}">${{ reviewed: '已批改', submitted: '已提交', rejected: '需重做' }[st] || '待完成'}</span></div>
+        ${hw.note ? `<div class="mt small">老师说：${esc(hw.note)}</div>` : ''}
+      </div>
+      ${head}
+      ${hw.questions.map((q, i) => qCard(q, i, edit)).join('')}
+      ${edit ? `<button class="btn block mt" data-act="qaSubmit">提交作业</button>
+        <div class="muted small center mt">单选、多选、判断、填空交上去马上出分</div>` : ''}`;
+  }
+
+  function qCard(q, i, edit) {
+    const a = q.myAnswer;
+    const reviewed = S.hw.status === 'reviewed';
+    let mark = '';
+    if (reviewed && a) {
+      mark = q.auto ? `<span class="mark ${a.autoCorrect ? 'ok' : 'bad'}">${a.autoCorrect ? '对' : '错'}</span>`
+        : `<span class="mark ${a.score >= q.score ? 'ok' : 'mid'}">${fmtNum(a.score)} 分</span>`;
+    }
+    const stem = `${q.stem ? `<div class="q-stem">${esc(q.stem)}</div>` : ''}
+      ${q.stemImage ? `<button class="stem-pic" data-act="zoom" data-src="${esc(q.stemImage.url)}"><img src="${esc(q.stemImage.url)}" alt="题目图片"></button>` : ''}`;
+    const body = edit ? qInput(q) : qShow(q, a);
+    const extra = reviewed ? `
+      ${a && !a.autoCorrect && q.auto && q.answer != null ? `<div class="q-key">正确答案：<b>${esc(fmtKey(q))}</b></div>` : ''}
+      ${a && a.comment ? `<div class="q-key">老师点评：${esc(a.comment)}</div>` : ''}
+      ${q.analysis ? `<div class="q-key muted">解析：${esc(q.analysis)}</div>` : ''}` : '';
+    return `<div class="qcard" id="q-${q.id}">
+      <div class="q-head"><span class="q-no">${i + 1}</span><span class="pill">${TYPE_NAME[q.type]}</span><span class="muted small grow">${fmtNum(q.score)} 分</span>${mark}</div>
+      ${stem}${body}${extra}
+    </div>`;
+  }
+
+  function qInput(q) {
+    const st = S.ans[q.id] || {};
+    const v = st.value;
+    if (q.type === 'single' || q.type === 'multi') {
+      const on = (k) => (q.type === 'single' ? Number(v) === k && v !== undefined && v !== null : Array.isArray(v) && v.includes(k));
+      return `<div class="opts">${q.options.map((o, k) => `<button class="opt ${on(k) ? 'on' : ''}" data-act="qaPick" data-q="${q.id}" data-k="${k}" aria-pressed="${on(k)}"><i>${LETTER[k]}</i><span>${esc(o)}</span></button>`).join('')}</div>
+        ${q.type === 'multi' ? '<div class="muted small">可以选多个</div>' : ''}`;
+    }
+    if (q.type === 'judge') {
+      return `<div class="row judge" style="gap:10px">
+        <button class="opt ${v === true ? 'on' : ''}" data-act="qaJudge" data-q="${q.id}" data-v="1"><i>✓</i><span>对</span></button>
+        <button class="opt ${v === false ? 'on' : ''}" data-act="qaJudge" data-q="${q.id}" data-v="0"><i>✗</i><span>错</span></button></div>`;
+    }
+    if (q.type === 'blank') {
+      const vals = Array.isArray(v) ? v : [];
+      return `<div class="blanks">${Array.from({ length: q.blankCount || 1 }, (_, k) => `<label class="blank"><span>${k + 1}</span><input data-qa-blank="${q.id}" data-k="${k}" value="${esc(vals[k] || '')}" placeholder="第 ${k + 1} 个空" autocomplete="off"></label>`).join('')}</div>`;
+    }
+    if (q.type === 'text') return `<textarea data-qa-text="${q.id}" rows="4" placeholder="在这里写答案">${esc(v || '')}</textarea>`;
+    if (q.type === 'photo') {
+      const ph = st.photos || [];
+      return `<div class="thumbs">${ph.map((p, k) => `<div class="thumb"><img src="${p.url}" alt="第 ${k + 1} 张"><button class="x" data-act="qaPhotoDel" data-q="${q.id}" data-k="${k}" aria-label="删掉这张">×</button></div>`).join('')}
+        ${ph.length < 6 ? `<label class="thumb add">${ic('image')}<span>${ph.length ? '再加一张' : '拍照 / 选照片'}</span><input type="file" accept="image/*" multiple data-qa-photo="${q.id}" hidden></label>` : ''}</div>`;
+    }
+    if (q.type === 'audio') {
+      const r = st.rec;
+      return `<div class="row" style="gap:8px">
+        <button class="btn sm ${r ? 'ghost' : 'coral'}" data-act="qaRec" data-q="${q.id}">${ic('mic')}${r ? '重录' : '开始录音'}</button>
+        ${r ? `<button class="btn sm ghost" data-act="qaPlay" data-q="${q.id}">${ic('speaker')}听一遍</button><span class="pill ok">${(r.durationMs / 1000).toFixed(1)} 秒</span>` : ''}</div>`;
+    }
+    return '';
+  }
+
+  function qShow(q, a) {
+    if (!a) return '<div class="muted small">没有作答</div>';
+    if (q.auto) return `<div class="q-my">我的答案：<b>${esc(fmtAnswer(q, a.value))}</b></div>`;
+    if (q.type === 'text') return `<div class="q-my pre">${esc(a.value || '')}</div>`;
+    if (q.type === 'photo') return `<div class="thumbs">${a.assets.map((x) => `<button class="thumb" data-act="zoom" data-src="${esc(x.url)}"><img src="${esc(x.url)}" alt="我的照片" loading="lazy"></button>`).join('')}</div>`;
+    if (q.type === 'audio') return a.assets[0] ? `<button class="btn sm ghost" data-act="qaPlayUrl" data-url="${esc(a.assets[0].url)}">${ic('speaker')}听我的录音</button>` : '';
+    return '';
+  }
+
+  function redrawQ(qid) {
+    const el = document.getElementById('q-' + qid);
+    const i = S.hw.questions.findIndex((q) => String(q.id) === String(qid));
+    if (el && i >= 0) el.outerHTML = qCard(S.hw.questions[i], i, true);
+  }
+
+  /* ---------- 喜报 / 作品分享 ----------
+   * 分享图在手机上画好传给服务器，服务器生成一个公开页 /s/xxx，页面底部有预约试听。
+   * 默认只显示「李*明」，家长可以选择显示全名；分享随时可在「我的」里撤回。
+   */
+  function wrapLines(ctx, text, maxW, maxLines) {
+    const lines = []; let line = '';
+    for (const ch of String(text || '')) {
+      if (ch === '\n') { lines.push(line); line = ''; continue; }
+      if (ctx.measureText(line + ch).width > maxW && line) { lines.push(line); line = ch; } else line += ch;
+    }
+    if (line) lines.push(line);
+    if (lines.length > maxLines) { lines.length = maxLines; lines[maxLines - 1] = lines[maxLines - 1].slice(0, -1) + '…'; }
+    return lines;
+  }
+
+  function drawQR(ctx, text, x0, y0, size) {
+    if (typeof window.qrcode !== 'function') return;
+    const qr = window.qrcode(0, 'M'); qr.addData(text); qr.make();
+    const n = qr.getModuleCount(), cell = size / n;
+    ctx.fillStyle = INK_DEEP;
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+      if (qr.isDark(r, c)) ctx.fillRect(x0 + c * cell, y0 + r * cell, Math.ceil(cell), Math.ceil(cell));
+    }
+  }
+
+  async function posterHeader(ctx, W) {
+    const logo = await loadImg('brand/logo-512.png') || await loadImg('brand/logo-192.png');
+    if (logo) ctx.drawImage(logo, 80, 72, 104, 104);
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+    ctx.fillStyle = INK_DEEP; ctx.font = `700 40px ${SERIF}`;
+    ctx.fillText('福斯特培训学校', logo ? 208 : 80, 126);
+    ctx.fillStyle = TEXT3; ctx.font = `400 19px ${SANS}`;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '5px';
+    ctx.fillText('FIRST TRAINING SCHOOL', logo ? 208 : 80, 162);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+    ctx.fillStyle = LINE; ctx.fillRect(80, 224, W - 160, 2);
+  }
+
+  function posterFooter(ctx, W, title, link) {
+    ctx.fillStyle = LINE; ctx.fillRect(80, 1240, W - 160, 2);
+    ctx.fillStyle = INK_DEEP; ctx.font = `700 40px ${SERIF}`; ctx.textAlign = 'left';
+    ctx.fillText(title, 80, 1330);
+    const d = new Date();
+    ctx.fillStyle = TEXT3; ctx.font = `400 24px ${SANS}`;
+    ctx.fillText(`${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`, 80, 1378);
+    drawQR(ctx, link, W - 80 - 150, 1262, 150);
+  }
+
+  const RED = '#D93A2B';
+
+  async function drawPraise(info, name) {
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+    const W = 1080, H = 1440;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, W, H);
+    await posterHeader(ctx, W);
+
+    // 「喜报」大字 + 朱红「优」印
+    ctx.fillStyle = RED; ctx.font = `900 190px ${SERIF}`; ctx.textAlign = 'left';
+    ctx.fillText('喜报', 70, 450);
+    ctx.save(); ctx.translate(850, 360); ctx.rotate(-10 * Math.PI / 180);
+    ctx.strokeStyle = RED; ctx.lineWidth = 9; ctx.strokeRect(-100, -100, 200, 200);
+    ctx.lineWidth = 2; ctx.strokeRect(-84, -84, 168, 168);
+    ctx.fillStyle = RED; ctx.textAlign = 'center'; ctx.font = `900 120px ${SERIF}`; ctx.fillText('优', 0, 42);
+    ctx.restore();
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = INK_DEEP; ctx.font = `700 64px ${SERIF}`;
+    ctx.fillText(`恭喜 ${name} 同学`, 80, 590);
+    ctx.fillStyle = TEXT2; ctx.font = `400 34px ${SANS}`;
+    const line = `${info.subject ? info.subject + '作业' : '作业'}「${info.title}」被老师评为优秀作业`;
+    wrapLines(ctx, line, W - 160, 2).forEach((l, i) => ctx.fillText(l, 80, 656 + i * 50));
+
+    let y = 790;
+    if (info.maxScore) {
+      ctx.fillStyle = INK; ctx.font = `700 96px ${SANS}`; ctx.fillText(fmtNum(info.score), 80, y + 60);
+      const w = ctx.measureText(fmtNum(info.score)).width;
+      ctx.fillStyle = TEXT3; ctx.font = `400 36px ${SANS}`; ctx.fillText(` / ${fmtNum(info.maxScore)} 分`, 80 + w, y + 60);
+    }
+    if (info.stars) {
+      ctx.font = `400 60px ${SANS}`; ctx.textAlign = 'left';
+      const sx = info.maxScore ? W - 80 - 5 * 64 : 80;
+      for (let k = 0; k < 5; k++) { ctx.fillStyle = k < info.stars ? '#FFC23D' : WASH2; ctx.fillText('★', sx + k * 64, y + (info.maxScore ? 52 : 60)); }
+    }
+
+    if (info.comment) {
+      y = 920;
+      ctx.font = `400 36px ${SERIF}`;
+      const lines = wrapLines(ctx, info.comment, W - 240, 3);
+      const h = 96 + lines.length * 56;
+      ctx.fillStyle = '#F4F2FC'; roundRect(ctx, 80, y, W - 160, h, 28); ctx.fill();
+      ctx.fillStyle = TEXT3; ctx.font = `700 26px ${SANS}`; ctx.fillText('老师评语', 120, y + 58);
+      ctx.fillStyle = INK_DEEP; ctx.font = `400 36px ${SERIF}`;
+      lines.forEach((l, i) => ctx.fillText(l, 120, y + 118 + i * 56));
+    }
+    posterFooter(ctx, W, '扫码预约试听课', location.origin + '/trial');
+    return cv.toDataURL('image/jpeg', 0.9);
+  }
+
+  async function drawWork(info, name) {
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+    const W = 1080, H = 1440;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, W, H);
+    await posterHeader(ctx, W);
+
+    // 装裱：浅底衬纸 + 细线框，作品按原比例放进去
+    const fx = 80, fy = 270, fw = W - 160, fh = 800;
+    ctx.fillStyle = '#F6F3EC'; ctx.fillRect(fx, fy, fw, fh);
+    const im = await loadImg(info.photo);
+    if (im) {
+      const pad = 40, k = Math.min((fw - pad * 2) / im.naturalWidth, (fh - pad * 2) / im.naturalHeight);
+      const w = im.naturalWidth * k, h = im.naturalHeight * k;
+      const x = fx + (fw - w) / 2, y = fy + (fh - h) / 2;
+      ctx.fillStyle = 'rgba(0,0,0,.08)'; ctx.fillRect(x + 6, y + 8, w, h);
+      ctx.drawImage(im, x, y, w, h);
+    }
+    ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.strokeRect(fx, fy, fw, fh);
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = INK_DEEP; ctx.font = `700 56px ${SERIF}`;
+    ctx.fillText(`${name} 的书法作品`, 80, 1150);
+    if (info.comment) {
+      ctx.fillStyle = TEXT2; ctx.font = `400 30px ${SERIF}`;
+      ctx.fillText('老师评语：' + wrapLines(ctx, info.comment, W - 320, 1)[0], 80, 1204);
+    }
+    if (info.excellent) {
+      ctx.save(); ctx.translate(W - 150, 1130); ctx.rotate(-10 * Math.PI / 180);
+      ctx.strokeStyle = RED; ctx.lineWidth = 6; ctx.strokeRect(-50, -50, 100, 100);
+      ctx.fillStyle = RED; ctx.textAlign = 'center'; ctx.font = `900 64px ${SERIF}`; ctx.fillText('优', 0, 22);
+      ctx.restore();
+    }
+    posterFooter(ctx, W, '扫码看书法作品展', location.origin + '/gallery');
+    return cv.toDataURL('image/jpeg', 0.9);
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+
+  function shareInfo(type) {
+    const hw = S.hw, sub = hw.mySubmission || {};
+    const photoQ = (hw.questions || []).find((q) => q.type === 'photo' && q.myAnswer && q.myAnswer.assets.length);
+    return {
+      type, submissionId: hw.submissionId, title: hw.title, subject: hw.subject ? hw.subject.name : '',
+      score: hw.kind === 'questions' ? sub.score : null, maxScore: hw.kind === 'questions' ? sub.maxScore : null,
+      stars: hw.stars, comment: hw.reviewText, excellent: hw.excellent,
+      photo: photoQ ? photoQ.myAnswer.assets[0].url : null,
+    };
+  }
+
+  async function drawSharePreview() {
+    const box = document.getElementById('sh-preview');
+    if (!box || !S.share) return;
+    const full = document.getElementById('sh-full').checked;
+    const name = full ? ((Store.user || {}).name || '同学') : maskName((Store.user || {}).name);
+    box.style.opacity = '.5';
+    S.share.image = await (S.share.info.type === 'work' ? drawWork(S.share.info, name) : drawPraise(S.share.info, name));
+    box.src = S.share.image; box.style.opacity = '';
+  }
+
   /* ---------- 我的 ---------- */
   const ME = {
     top: () => `<h1><img src="brand/logo-96.png" alt="">我的</h1>`,
     tab: true,
     body: async () => {
-      const sum = await API.get('/api/study/summary');
-      const me = await API.get('/api/me');
+      const [sum, me, allShares] = await Promise.all([API.get('/api/study/summary'), API.get('/api/me'), API.get('/api/shares/mine').catch(() => [])]);
+      const shares = allShares.filter((x) => x.status === 'active');   // 撤回的不再列出
       const map = {}; sum.days.forEach((d) => { map[d.date] = d; });
       const cells = [];
       for (let i = 27; i >= 0; i--) {
@@ -384,6 +705,14 @@
         <div class="card"><div class="row between"><div><div class="section-title">学习海报</div>
           <div class="muted small">把打卡和星星做成一张图，发给家人朋友</div></div>
           <button class="btn sm star" data-act="poster">生成</button></div></div>
+        <div class="card"><div class="section-title">我的分享</div>
+          ${shares.length ? shares.map((x) => `<div class="share-row ${x.status}">
+            ${x.image ? `<img src="${esc(x.image)}" alt="">` : '<div class="ph">已撤回</div>'}
+            <div class="grow"><div class="strong ellip">${esc(x.title)}</div>
+              <div class="muted small">${x.status === 'active' ? `${x.views} 位亲友看过 · ` : ''}${fmtDate(x.createdAt)}</div></div>
+            ${x.status === 'active' ? `<div class="share-acts"><a class="btn sm ghost" href="${esc(x.url)}?guide=1">再分享</a><button class="btn sm danger" data-act="shareRevoke" data-id="${x.id}">撤回</button></div>` : '<span class="pill">已撤回</span>'}
+          </div>`).join('') : '<div class="muted small mt">作业被老师评为优秀后，可以生成喜报发给家人朋友</div>'}
+        </div>
         <div class="card"><div class="row between"><span>切换账号</span><button class="btn sm grey" data-act="logout">退出登录</button></div></div>`;
     },
   };
@@ -747,6 +1076,106 @@
 
   /* ---------- 动作 ---------- */
   const ACT = {
+    pickSubj(el) { S.subj = el.dataset.code; render(); },
+    zoom(el) { lightbox(el.dataset.src); },
+    qaPick(el) {
+      const q = S.hw.questions.find((x) => String(x.id) === el.dataset.q), k = Number(el.dataset.k);
+      const st = S.ans[q.id] || (S.ans[q.id] = {});
+      if (q.type === 'single') st.value = k;
+      else { const v = Array.isArray(st.value) ? st.value : []; st.value = v.includes(k) ? v.filter((x) => x !== k) : [...v, k]; }
+      redrawQ(q.id);
+    },
+    qaJudge(el) { S.ans[el.dataset.q] = { value: el.dataset.v === '1' }; redrawQ(el.dataset.q); },
+    qaPhotoDel(el) { const st = S.ans[el.dataset.q]; st.photos.splice(Number(el.dataset.k), 1); redrawQ(el.dataset.q); },
+    async qaRec(el) {
+      const qid = el.dataset.q;
+      if (!Rec.mr) {
+        try { await Rec.start(); S.recQ = qid; el.innerHTML = `${ic('mic')}停止`; el.classList.add('recording'); toast('录音中…'); }
+        catch (e) { toast(e.message); }
+      } else {
+        if (S.recQ !== qid) return toast('先停止正在进行的录音');
+        const r = await Rec.stop();
+        (S.ans[qid] || (S.ans[qid] = {})).rec = r;
+        S.recQ = null; redrawQ(qid);
+      }
+    },
+    qaPlay(el) { const st = S.ans[el.dataset.q]; if (st && st.rec) Clip.play(st.rec.url, el); },
+    qaPlayUrl(el) { Clip.play(el.dataset.url, el); },
+    qaRedo() { S.editing = S.hw.id; render(); },
+    async qaSubmit(el) {
+      if (Rec.mr) return toast('先停止录音');
+      const qs = S.hw.questions;
+      const answers = [];
+      let blank = 0;
+      for (const [i, q] of qs.entries()) {
+        const st = S.ans[q.id] || {};
+        if (q.auto) {
+          const v = st.value;
+          const empty = v == null || (Array.isArray(v) && !v.some((x) => String(x == null ? '' : x).trim()));
+          if (empty) blank++;
+          answers.push({ questionId: q.id, value: empty ? null : v });
+        } else if (q.type === 'text') {
+          if (!String(st.value || '').trim()) return toast(`第 ${i + 1} 题还没写`);
+          answers.push({ questionId: q.id, value: st.value });
+        } else if (q.type === 'photo') {
+          if (!(st.photos && st.photos.length)) return toast(`第 ${i + 1} 题还没拍照`);
+          answers.push({ questionId: q.id, photos: st.photos.map((p) => p.base64) });
+        } else if (q.type === 'audio') {
+          if (!st.rec) return toast(`第 ${i + 1} 题还没录音`);
+          answers.push({ questionId: q.id, audioBase64: st.rec.base64, ext: st.rec.ext, durationMs: st.rec.durationMs });
+        }
+      }
+      if (blank && !confirm(`还有 ${blank} 道题没做，确定交吗？`)) return;
+      el.disabled = true; el.textContent = '提交中…';
+      try {
+        const r = await API.post(`/api/homeworks/${S.hw.id}/answers`, { answers, elapsedSec: accum });
+        S.editing = null;
+        if (r.status === 'reviewed') {
+          const stars = Math.max(1, Math.min(5, Math.round((r.maxScore ? r.score / r.maxScore : 0) * 5)));
+          celebrate({ mark: fmtNum(r.score), label: `满分 ${fmtNum(r.maxScore)}`, title: r.score >= r.maxScore ? '全对！' : '分数出来啦',
+            sub: r.score >= r.maxScore ? '一道都没错' : '看看错在哪里，下次就会了', gain: 5 + stars * 2 });
+          render();
+        } else {
+          celebrate({ mark: '交', label: '作业已提交', title: '作业交上啦', sub: '老师批改后，这里就能看到分数和评语', gain: 5 });
+          go('hwlist');
+        }
+      } catch (e) { toast(e.message, 2600); el.disabled = false; el.textContent = '提交作业'; }
+    },
+    async shareOpen(el) {
+      const info = shareInfo(el.dataset.type);
+      S.share = { info, image: null };
+      closePoster();
+      const m = document.createElement('div');
+      m.className = 'poster-mask'; m.id = 'poster';
+      m.innerHTML = `<div class="poster-sheet" role="dialog" aria-label="${info.type === 'work' ? '分享书法作品' : '生成喜报'}">
+          <img id="sh-preview" alt="分享图预览">
+          <label class="check"><input type="checkbox" id="sh-full"><span>显示孩子全名<br><span class="muted small">不勾选时只显示「${esc(maskName((Store.user || {}).name))}」</span></span></label>
+          <div class="muted small">分享出去的页面可以随时在「我的 → 我的分享」里撤回</div>
+          <div class="row" style="gap:10px">
+            <button class="btn ghost grow" data-act="closePoster">取消</button>
+            <button class="btn grow" data-act="shareCreate">生成分享页</button>
+          </div>
+        </div>`;
+      m.addEventListener('click', (e) => { if (e.target === m) closePoster(); });
+      document.getElementById('app').appendChild(m);
+      try { await drawSharePreview(); } catch (e) { toast('分享图生成失败：' + e.message); }
+    },
+    async shareCreate(el) {
+      if (!S.share || !S.share.image) return toast('分享图还在生成，稍等一下');
+      el.disabled = true; el.textContent = '生成中…';
+      try {
+        const r = await API.post('/api/shares', {
+          type: S.share.info.type, submissionId: S.share.info.submissionId,
+          imageBase64: S.share.image, showFullName: document.getElementById('sh-full').checked,
+        });
+        location.href = r.url + '?guide=1';
+      } catch (e) { toast(e.message); el.disabled = false; el.textContent = '生成分享页'; }
+    },
+    async shareRevoke(el) {
+      if (!confirm('撤回后，别人再打开这个链接就看不到了。确定撤回？')) return;
+      try { await API.post(`/api/shares/${el.dataset.id}/revoke`); toast('已撤回'); render(); }
+      catch (e) { toast(e.message); }
+    },
     lsToggle() { Listen.toggle(); },
     lsPrev() { Listen.prev(); },
     lsNext() { Listen.next(); },
