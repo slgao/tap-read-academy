@@ -22,7 +22,7 @@ function seals(sum) {
 }
 
 Page({
-  data: { user: {}, sum: { streak: 0, stars: 0, days: [], needSeconds: 60 }, books: [], todo: [],
+  data: { user: {}, sum: { streak: 0, stars: 0, days: [], needSeconds: 300 }, books: [], todo: [],
           todayMin: 0, seals: [], greeting: '你好', needMin: 1 },
   onShow() {
     if (!wx.getStorageSync('token')) return wx.redirectTo({ url: '/pages/login/login' });

@@ -727,7 +727,7 @@
             <div><b>${sum.totalMinutes}</b><span>累计分钟</span></div>
           </div></div>
         <div class="card"><div class="section-title mb">近 4 周打卡</div><div class="calendar">${cells.join('')}</div>
-          <div class="muted small mt">当天学习满 ${sum.needSeconds} 秒就盖一个印（正式版为 5 分钟）</div></div>
+          <div class="muted small mt">当天学习满 ${Math.max(1, Math.round(sum.needSeconds / 60))} 分钟就盖一个印</div></div>
         <div class="card"><div class="row between mb"><div class="section-title">我的班级</div>
             <button class="btn sm ghost" data-act="joinClass">+ 加入班级</button></div>
           ${me.classes.map((c) => `<div class="class-row">${subjTag(c.subject)}<span class="grow ellip">${esc(c.name)}</span>${c.gradeBand ? `<span class="muted small">${esc(c.gradeBand)}</span>` : ''}</div>`).join('')

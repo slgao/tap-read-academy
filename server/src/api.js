@@ -8,7 +8,7 @@ const store = require('./storage');
 const { ok, fail, readBody, rid, today, dayKey, inviteCode } = require('./util');
 const grading = require('./grading');
 
-const CHECKIN_SECONDS = 60;   // 当日有效点读满 60 秒即算打卡（PRD 正式值为 5 分钟，demo 调小便于体验）
+const CHECKIN_SECONDS = Number(process.env.CHECKIN_SECONDS) || 300;   // 当天学习满 5 分钟算打卡
 
 /* ---------- 视图辅助 ---------- */
 const assetOut = (a) => (a ? { id: a.id, url: store.urlOf(a.relPath), durationMs: a.durationMs, placeholder: a.placeholder } : null);

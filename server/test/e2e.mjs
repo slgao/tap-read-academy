@@ -143,7 +143,13 @@ const TAG = '__e2e_' + Date.now();
   check('已批改后不可重交', /已批改/.test(dup || ''), dup);
 
   log('\n[5] 打卡');
-  const hb = await call('POST', '/api/study/heartbeat', { seconds: 70 }, S.token);
+  let hb = await call('POST', '/api/study/heartbeat', { seconds: 30 }, S.token);
+  // 今天还没打过卡时才能验这一条（同一天重复跑测试时，学生早就打过卡了）
+  if (hb.todaySeconds < hb.needSeconds) {
+    check('没到时长不算打卡', hb.checkedInToday === false, `今日 ${hb.todaySeconds}s / 需 ${hb.needSeconds}s`);
+  }
+  // 单次心跳最多记 120 秒，按需要的时长补几次
+  while (hb.todaySeconds < hb.needSeconds) hb = await call('POST', '/api/study/heartbeat', { seconds: 120 }, S.token);
   check('满时长即打卡', hb.checkedInToday === true, `今日 ${hb.todaySeconds}s / 需 ${hb.needSeconds}s，连续 ${hb.streak} 天`);
   const sum = await call('GET', '/api/study/summary', null, S.token);
   check('学情汇总', sum.days.length > 0 && sum.stars > 0, `${sum.stars} 星 / ${sum.totalMinutes} 分钟`);
