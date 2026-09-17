@@ -909,7 +909,10 @@ on('POST', '/api/shares/:id/revoke', async (ctx) => {
 });
 
 const GRADES = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级', '初一', '初二', '初三', '其他'];
-const leadHits = new Map();                             // 简单的按 IP 限流：每小时 5 次
+const leadHits = new Map();
+// 按 IP 限流。同一个 Wi-Fi 下几位家长一起报名很常见，上限不能太小；
+// 真正防重复提交的是下面"同一手机号 10 分钟内只记一条"。
+const LEADS_PER_HOUR = Number(process.env.LEADS_PER_HOUR) || 20;
 
 on('POST', '/api/public/leads', async (ctx) => {
   const b = ctx.body;
@@ -925,7 +928,7 @@ on('POST', '/api/public/leads', async (ctx) => {
   // 顺手清掉过期的 IP，免得这张表一直涨
   for (const [k, v] of leadHits) if (!v.some((t) => nowMs - t < 3600e3)) leadHits.delete(k);
   const hits = (leadHits.get(ip) || []).filter((t) => nowMs - t < 3600e3);
-  if (hits.length >= 5) return fail(ctx.res, 429, '提交太频繁了，请稍后再试');
+  if (hits.length >= LEADS_PER_HOUR) return fail(ctx.res, 429, '提交太频繁了，请稍后再试');
   hits.push(nowMs); leadHits.set(ip, hits);
 
   const tenMinAgo = new Date(nowMs - 600e3).toISOString().replace('T', ' ').slice(0, 19);

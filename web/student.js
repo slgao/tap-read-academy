@@ -53,17 +53,36 @@
   const S = { view: 'home', book: null, catalog: null, page: null, hw: null, showHs: false, repeat: false, recs: {}, ans: {}, subj: '' };
   let accum = 0, pending = 0;
 
-  /* ---------- 学习时长心跳 ---------- */
+  /* ---------- 学习时长心跳 ----------
+   * 以前只在"音频正好在播"的那一刻计时：点读一句只响两三秒，5 秒采样常常正好错过，
+   * 读十分钟也攒不到一分钟；语文、数学、书法这些没有音频的作业更是一秒都不算，
+   * 首页的圆盘看着就像卡住不动。
+   * 现在按"在学习页面上并且人还在操作"计时：在读课文、听课文、做作业都算，
+   * 音频在放时即使锁屏也算；切到后台、停在首页或者两分钟没动手就不算。
+   */
+  const STUDY_VIEWS = ['reader', 'listen', 'hwdetail'];
+  const IDLE_MS = 120000;
+  let lastActive = Date.now();
+  const touch = () => { lastActive = Date.now(); };
+  ['click', 'touchstart', 'keydown', 'scroll'].forEach((ev) => document.addEventListener(ev, touch, { passive: true, capture: true }));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) touch(); });
+
+  function studying() {
+    if (player.current || (typeof Listen !== 'undefined' && Listen.playing())) return true;   // 放音频：锁屏听也算
+    if (document.hidden) return false;                                                        // 切去别的 App 不算
+    if (Rec.mr) return true;                                                                  // 正在录音
+    return STUDY_VIEWS.includes(S.view) && Date.now() - lastActive < IDLE_MS;
+  }
+
   setInterval(async () => {
-    if (player.current || (typeof Listen !== 'undefined' && Listen.playing())) { accum += 5; pending += 5; }
+    if (studying()) { accum += 5; pending += 5; }
     if (pending >= 15 && Store.token) {
       const s = pending; pending = 0;
       try {
         const r = await API.post('/api/study/heartbeat', { seconds: s });
-        if (r.justChecked) {
-          celebrate({ mark: '读', label: '今日已打卡', title: '今天的印盖上啦', sub: `已经连续打卡 ${r.streak} 天`, gain: 0 });
-          if (S.view === 'home') render();
-        }
+        // 只在首页重画：正在做作业时重画会把还没提交的答案清掉
+        if (r.justChecked) celebrate({ mark: '读', label: '今日已打卡', title: '今天的印盖上啦', sub: `已经连续打卡 ${r.streak} 天`, gain: 0 });
+        if (S.view === 'home') render();            // 停在首页时圆盘跟着一起走
       } catch {}
     }
   }, 5000);
@@ -182,7 +201,7 @@
           </div>
           <div class="goal-text grow">
             <div class="strong">${sum.checkedInToday ? '今日目标完成，印已盖好' : `再读 ${leftMin} 分钟就能盖印`}</div>
-            <div class="muted small">点读课文或者听力都算时间</div>
+            <div class="muted small">点读、听力、做作业都算时间</div>
             <div class="streak">${ic('calendar')}连续打卡 ${sum.streak} 天</div>
           </div>
         </div>
@@ -702,7 +721,7 @@
             <div><b>${sum.totalMinutes}</b><span>累计分钟</span></div>
           </div></div>
         <div class="card"><div class="section-title mb">近 4 周打卡</div><div class="calendar">${cells.join('')}</div>
-          <div class="muted small mt">当天点读满 ${sum.needSeconds} 秒就盖一个印（正式版为 5 分钟）</div></div>
+          <div class="muted small mt">当天学习满 ${sum.needSeconds} 秒就盖一个印（正式版为 5 分钟）</div></div>
         <div class="card"><div class="row between mb"><div class="section-title">我的班级</div>
             <button class="btn sm ghost" data-act="joinClass">+ 加入班级</button></div>
           ${me.classes.map((c) => `<div class="class-row">${subjTag(c.subject)}<span class="grow ellip">${esc(c.name)}</span>${c.gradeBand ? `<span class="muted small">${esc(c.gradeBand)}</span>` : ''}</div>`).join('')
