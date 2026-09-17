@@ -437,6 +437,8 @@ on('POST', '/api/homeworks/:id/submit', async (ctx) => {
 on('DELETE', '/api/homeworks/:id', async (ctx) => {
   const hw = await repo.homeworks.byId(ctx.params.id);
   if (!hw) return fail(ctx.res, 3004, '作业不存在');
+  const cls = await repo.classes.byId(hw.classId);
+  if (ctx.user.role === 'teacher' && cls && cls.teacherId !== ctx.user.id) return fail(ctx.res, 403, '只能删除自己班的作业');
   await repo.homeworks.remove(hw.id);
   ok(ctx.res, { ok: true });
 }, { roles: ['teacher', 'admin'] });

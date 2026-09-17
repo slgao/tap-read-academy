@@ -75,10 +75,11 @@ async function subjectChips(selected) {
 }
 
 async function leadForm({ token = '', source = 'share', subjectCode = '' }) {
+  const sub = subjectCode ? await repo.subjects.byCode(subjectCode) : null;
   const grades = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级', '初一', '初二', '初三', '其他'];
   return `
   <section class="card pub-form" id="trial">
-    <h2 class="section-title">想让孩子也来试试？</h2>
+    <h2 class="section-title">${sub ? `想让孩子也来学${esc(sub.name)}？` : '想让孩子也来试试？'}</h2>
     <p class="muted">留下联系方式，${SCHOOL}的老师会联系您安排一节试听课。</p>
     <form id="lead-form" data-token="${esc(token)}" data-source="${esc(source)}" novalidate>
       <label class="field"><span>孩子年级</span>
@@ -138,9 +139,9 @@ async function sharePage(req, res, url, token) {
     ${share.comment ? `<section class="card"><h2 class="section-title">老师评语</h2>
       <p class="pub-comment">${esc(share.comment)}</p>
       ${share.stars ? `<div class="stars">${'★'.repeat(share.stars)}<span class="off">${'★'.repeat(5 - share.stars)}</span></div>` : ''}</section>` : ''}
-    <section class="card pub-links">
+    ${subject && subject.code === 'calli' ? `<section class="card pub-links">
       <a class="btn ghost block" href="/gallery">看看更多书法作品</a>
-    </section>
+    </section>` : ''}
     ${await leadForm({ token: share.token, source: 'share', subjectCode: subject ? subject.code : '' })}
     ${guide ? `<div class="share-guide" id="share-guide" role="dialog" aria-label="分享方法">
         <div class="arrow"></div>

@@ -203,6 +203,9 @@ const TAG = '__e2e_' + Date.now();
     && sView.subject.code === 'math' && !!sView.questions[4].stemImage, `${sView.subject.name} ${sView.questions.length} 题（科目跟班级走）`);
   const chg = await expectFail('PUT', `/api/classes/${mathCls.id}`, { subjectId: calli.id, gradeBand: '三四年级' }, T.token);
   check('布置过作业的班不能改科目', /不能再改科目/.test(chg || ''), chg);
+  const other = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TAG + '赵老师', teacherCode: process.env.TEACHER_CODE || '' });
+  const otherDel = await expectFail('DELETE', `/api/homeworks/${qhw.id}`, null, other.token);
+  check('别的老师不能删这个班的作业', /只能删除自己班/.test(otherDel || ''), otherDel);
   const delHw = await expectFail('DELETE', `/api/classes/${mathCls.id}`, null, T.token);
   check('布置过作业的班不能删', /不能删除/.test(delHw || ''), delHw);
 
@@ -243,6 +246,7 @@ const TAG = '__e2e_' + Date.now();
   const html = await pageR.text();
   check('喜报分享页：卡片标题带打码姓名、og:image 是完整地址', pageR.status === 200 && /李\*/.test(html) && /property="og:image" content="https?:\/\/[^"]+\/files\/shares\//.test(html),
     (html.match(/<title>[^<]*<\/title>/) || [''])[0]);
+  check('数学喜报页不出现书法作品展入口，预约标题跟科目走', !html.includes('看看更多书法作品') && html.includes('想让孩子也来学数学'), '');
   const cookie = (pageR.headers.get('set-cookie') || '').split(';')[0];
   await fetch(BASE + share.url, { headers: { cookie } });
   const mine = await call('GET', '/api/shares/mine', null, S.token);
@@ -261,6 +265,8 @@ const TAG = '__e2e_' + Date.now();
   const work = await call('POST', '/api/shares', { type: 'work', submissionId: cr.submissionId, imageBase64: PRAISE, showFullName: true }, S.token);
   const gal = await (await fetch(BASE + '/gallery')).text();
   check('书法作品进入作品展，并显示全名（家长选择了显示全名）', gal.includes('/s/' + work.url.split('/').pop()) && gal.includes('李小明'), work.url);
+  const workHtml = await (await fetch(BASE + work.url)).text();
+  check('书法作品页有作品展入口', workHtml.includes('看看更多书法作品') && workHtml.includes('想让孩子也来学书法'), '');
 
   const badLead = await expectFail('POST', '/api/public/leads', { token: work.url.split('/').pop(), phone: '12345', grade: '三年级', agree: true });
   check('预约：手机号格式不对被拒', /手机号/.test(badLead || ''), badLead);

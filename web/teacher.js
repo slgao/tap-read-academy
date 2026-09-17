@@ -276,7 +276,7 @@
   }
 
   const REVIEW = {
-    top: () => `<button class="back" data-go="hwlist">‹</button><h1>批改</h1>`, noTab: true,
+    top: () => `<button class="back" data-go="hwlist">‹</button><h1>批改</h1><button class="btn sm danger" data-act="delHw">删除作业</button>`, noTab: true,
     body: async () => {
       const d = await API.get(`/api/homeworks/${S.hwId}/submissions`);
       S.rev = d;
@@ -424,6 +424,15 @@
         const c = S.clsId ? await API.put('/api/classes/' + S.clsId, body) : await API.post('/api/classes', body);
         toast(S.clsId ? '已保存' : `已创建「${c.name}」，邀请码 ${c.inviteCode}`, 2800); go('classes');
       } catch (e) { toast(e.message, 2600); el.disabled = false; }
+    },
+    async delHw(el) {
+      const hw = S.rev && S.rev.homework;
+      if (!hw) return;
+      const n = hw.submitted || 0;
+      if (!confirm(`删除作业「${hw.title}」？${n ? `已经交上来的 ${n} 份作业、分数和评语会一起删掉，` : ''}删除后找不回来。`)) return;
+      el.disabled = true;
+      try { await API.del('/api/homeworks/' + hw.id); toast('作业已删除'); go('hwlist'); }
+      catch (e) { toast(e.message); el.disabled = false; }
     },
     async delClass() {
       if (!confirm('删除这个班？学生会被移出，但学生账号还在')) return;
