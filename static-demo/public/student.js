@@ -255,10 +255,10 @@
             <button class="iconbtn rec" data-act="recToggle" id="btn-rec" aria-label="跟读录音">${ic('mic')}</button>
             <button class="iconbtn" data-act="playMyRec" id="btn-myrec" aria-label="听我的录音" hidden>${ic('speaker')}</button>
           </div>
-          <div class="muted small mt" style="display:flex;justify-content:space-between">
-            <span>${d.prevPageId ? '‹ 上一页' : ''}</span>
-            <span id="rec-tip"></span>
-            <span>${d.nextPageId ? '下一页 ›' : ''}</span>
+          <div class="pagenav">
+            <button class="btn sm ghost" data-act="turnPage" data-pid="${d.prevPageId || ''}" ${d.prevPageId ? '' : 'disabled'} aria-label="上一页">‹ 上一页</button>
+            <span class="muted small" id="rec-tip">左右滑动也能翻页</span>
+            <button class="btn sm ghost" data-act="turnPage" data-pid="${d.nextPageId || ''}" ${d.nextPageId ? '' : 'disabled'} aria-label="下一页">下一页 ›</button>
           </div>
         </div>`;
     },
@@ -275,6 +275,16 @@
         if (en) en.textContent = hs.en || '';
         if (cn) cn.textContent = hs.cn || '';
       });
+      // 左右滑动翻页：水平位移明显大于垂直位移才算，不影响上下滚动看课本
+      let sx = 0, sy = 0, multi = false;
+      $view.ontouchstart = (e) => { multi = e.touches.length > 1; sx = e.touches[0].clientX; sy = e.touches[0].clientY; };
+      $view.ontouchend = (e) => {
+        if (multi || S.view !== 'reader' || !S.page) return;
+        const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+        if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+        const pid = dx < 0 ? S.page.nextPageId : S.page.prevPageId;
+        if (pid) turnTo(pid); else toast(dx < 0 ? '已经是最后一页' : '已经是第一页');
+      };
       const pw = $view.querySelector('.pagewrap');
       if (pw) {
         pw.addEventListener('click', (e) => {
@@ -696,6 +706,14 @@
   }
   function closePoster() { const m = document.getElementById('poster'); if (m) m.remove(); }
 
+  /** 翻到指定页：停掉正在放的声音；正在录音时不翻，免得录音丢失 */
+  function turnTo(pageId) {
+    if (Rec.mr) { toast('先点一下录音按钮结束录音，再翻页'); return; }
+    player.stop();
+    go('reader', { pageId });
+    $view.scrollTop = 0;
+  }
+
   function greeting() {
     const h = new Date().getHours();
     return h < 6 ? '夜深了' : h < 11 ? '早上好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
@@ -760,6 +778,7 @@
       } catch (e) { toast(e.message); }
     },
     logout() { Store.clear(); go('login'); },
+    turnPage(el) { const pid = Number(el.dataset.pid); if (pid) turnTo(pid); },
     leaveReader() { player.stop(); S.hwHotspotIds = null; go(S.catalog ? 'catalog' : 'shelf', { bookId: S.catalog ? S.catalog.book.id : null }); },
     toggleHs() { S.showHs = !S.showHs; document.querySelectorAll('.hs').forEach((el) => el.classList.toggle('show', S.showHs)); $top.innerHTML = READER.top(); },
     toggleRepeat(el) { S.repeat = !S.repeat; el.classList.toggle('on', S.repeat); toast(S.repeat ? '单句复读：开' : '单句复读：关'); },

@@ -28,8 +28,9 @@
 
   function buildIndex() {
     for (const b of C.books) {
+      // 整本书连续翻页
+      const ids = b.lessons.flatMap((l) => l.pages.map((p) => p.id));
       for (const l of b.lessons) {
-        const ids = l.pages.map((p) => p.id);
         for (const p of l.pages) {
           idx.pages[p.id] = { page: p, lesson: l, book: b };
           idx.siblings[p.id] = ids;

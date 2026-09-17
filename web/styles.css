@@ -30,7 +30,7 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 /* hidden 属性必须真正隐藏：否则 .tabbar{display:flex} 会盖过它 */
 [hidden]{display:none !important}
-html,body{margin:0;padding:0;height:100%}
+html,body{margin:0;padding:0;height:100%;overscroll-behavior-x:none}
 body{
   font-family:var(--sans);font-size:15px;line-height:1.6;color:var(--text);
   background:#E6E2F4;display:flex;justify-content:center;align-items:stretch;
@@ -346,3 +346,9 @@ table.mini th{color:var(--text-3);font-weight:700;font-size:12px}
 /* 标题过长时单行省略，不把顶栏撑成两行 */
 .topbar h1 > .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .topbar h1 > .sub{flex:0 0 auto}
+/* 点读页翻页 */
+.pagenav{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
+.pagenav .btn.sm{min-width:88px}
+.pagenav .muted{flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 点读页左右滑动用来翻页：横向手势由页面处理，避免浏览器把右滑当成"返回上一页"直接离开应用 */
+.reader{touch-action:pan-y pinch-zoom;overscroll-behavior:contain}

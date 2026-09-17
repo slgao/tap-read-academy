@@ -22,9 +22,9 @@
     <view class="ic rec {{recording ? 'recording' : ''}}" bindtap="recToggle">录</view>
     <view wx:if="{{myRecPath}}" class="ic {{myRecPlaying ? 'playing' : ''}}" bindtap="playMyRec">{{myRecPlaying ? '停' : '听'}}</view>
   </view>
-  <view class="row between muted small" style="margin-top:12rpx">
-    <text bindtap="prevPage">{{prevPageId ? '‹ 上一页' : ''}}</text>
-    <text>{{recTip}}</text>
-    <text bindtap="nextPage">{{nextPageId ? '下一页 ›' : ''}}</text>
+  <view class="row between" style="margin-top:16rpx">
+    <view class="btn sm ghost {{prevPageId ? '' : 'disabled'}}" hover-class="button-hover" bindtap="prevPage">‹ 上一页</view>
+    <text class="muted small">{{recTip}}</text>
+    <view class="btn sm ghost {{nextPageId ? '' : 'disabled'}}" hover-class="button-hover" bindtap="nextPage">下一页 ›</view>
   </view>
 </view>

@@ -139,7 +139,9 @@ on('GET', '/api/pages/:id', async (ctx) => {
   if (!page) return fail(ctx.res, 3003, '页面不存在');
   const lesson = await repo.lessons.byId(page.lessonId);
   const book = await repo.books.byId(lesson.bookId);
-  const siblings = await repo.pages.idsByLesson(page.lessonId);
+  // 整本书按「课顺序 + 页顺序」连续翻页，翻到一课的最后一页能接着翻到下一课
+  const siblings = [];
+  for (const l of await repo.lessons.byBook(lesson.bookId)) siblings.push(...await repo.pages.idsByLesson(l.id));
   const idx = siblings.indexOf(page.id);
 
   const hotspots = [];

@@ -88,6 +88,16 @@ const TAG = '__e2e_' + Date.now();
     && resaved.hotspots[0].cn.endsWith('(改过)'),
     'id ' + idsBefore.join(',') + ' 不变');
 
+  // 翻页：整本书连续翻，跨课也能翻过去
+  const lesson2 = await call('POST', '/api/admin/lessons', { bookId: book.id, title: TAG + ' Lesson 2' }, T.token);
+  const page2 = await call('POST', '/api/admin/pages', { lessonId: lesson2.id, pageNo: 2, imageBase64: PNG_1x1, ext: 'png' }, T.token);
+  const p1 = await call('GET', `/api/pages/${page.id}`, null, T.token);
+  const p2 = await call('GET', `/api/pages/${page2.id}`, null, T.token);
+  check('跨课翻页：第一课最后一页能翻到下一课', p1.nextPageId === page2.id && p1.prevPageId === null,
+    `第1课页 next=${p1.nextPageId}`);
+  check('跨课翻页：下一课第一页能翻回上一课', p2.prevPageId === page.id && p2.nextPageId === null,
+    `第2课页 prev=${p2.prevPageId}`);
+
   log('\n[3b] 听力');
   const listen = await call('GET', '/api/listening', null, T.token);
   const lb = listen.find((x) => x.bookId === book.id);
