@@ -692,7 +692,7 @@
           <div class="row" style="gap:14px">
             <div class="avatar">${esc(((Store.user || {}).name || '同').slice(-2))}</div>
             <div class="grow"><h2>${esc((Store.user || {}).name || '')}</h2>
-              <div class="small">${me.classes.map((c) => esc(c.name)).join('、') || '还没加入班级'}</div>
+              <div class="small">${me.classes.length ? [...new Set(me.classes.map((c) => c.subject ? c.subject.name : c.name))].map(esc).join(' · ') : '还没加入班级'}</div>
               <div class="level-line"><b>${levelOf(sum.stars).name}</b></div></div>
           </div>
           <div class="stats">
@@ -702,6 +702,11 @@
           </div></div>
         <div class="card"><div class="section-title mb">近 4 周打卡</div><div class="calendar">${cells.join('')}</div>
           <div class="muted small mt">当天点读满 ${sum.needSeconds} 秒就盖一个印（正式版为 5 分钟）</div></div>
+        <div class="card"><div class="row between mb"><div class="section-title">我的班级</div>
+            <button class="btn sm ghost" data-act="joinClass">+ 加入班级</button></div>
+          ${me.classes.map((c) => `<div class="class-row">${subjTag(c.subject)}<span class="grow ellip">${esc(c.name)}</span>${c.gradeBand ? `<span class="muted small">${esc(c.gradeBand)}</span>` : ''}</div>`).join('')
+            || '<div class="muted small">向老师要班级邀请码，报了几个科目就加入几个班</div>'}
+        </div>
         <div class="card"><div class="row between"><div><div class="section-title">学习海报</div>
           <div class="muted small">把打卡和星星做成一张图，发给家人朋友</div></div>
           <button class="btn sm star" data-act="poster">生成</button></div></div>
@@ -953,11 +958,11 @@
 
     // 名字 + 大印章（连续打卡天数）
     const name = (me.user && me.user.name) || '同学';
-    const cls = (me.classes || []).map((c) => c.name).join('、');
+    const cls = [...new Set((me.classes || []).map((c) => (c.subject ? c.subject.name : c.name)))].join('、');
     ctx.fillStyle = INK_DEEP; ctx.font = `700 76px ${SERIF}`;
     ctx.fillText(name, 80, 360);
     ctx.fillStyle = TEXT2; ctx.font = `400 30px ${SANS}`;
-    ctx.fillText(cls ? `${cls} · 每天坚持读英语` : '每天坚持读英语', 80, 418);
+    ctx.fillText(cls ? `学习${cls} · 每天坚持打卡` : '每天坚持打卡', 80, 418);
 
     ctx.save();
     ctx.translate(820, 370); ctx.rotate(-8 * Math.PI / 180);
@@ -1076,6 +1081,12 @@
 
   /* ---------- 动作 ---------- */
   const ACT = {
+    async joinClass() {
+      const code = (prompt('输入老师给的班级邀请码') || '').trim();
+      if (!code) return;
+      try { const c = await API.post('/api/classes/join', { inviteCode: code }); toast(`已加入「${c.name}」`); render(); }
+      catch (e) { toast(e.message); }
+    },
     pickSubj(el) { S.subj = el.dataset.code; render(); },
     zoom(el) { lightbox(el.dataset.src); },
     qaPick(el) {

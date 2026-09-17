@@ -266,4 +266,10 @@ const en = db.prepare("SELECT id FROM subjects WHERE code='en'").get();
 db.prepare('UPDATE homeworks SET subject_id=? WHERE subject_id IS NULL').run(en.id);
 db.prepare("UPDATE homeworks SET kind='follow_read' WHERE kind IS NULL").run();
 
+// 培训机构按科目开班、同一科目按年级段分班：班级带上科目和年级段
+addColumn('classes', 'subject_id', 'INTEGER REFERENCES subjects(id)');
+addColumn('classes', 'grade_band', "TEXT DEFAULT ''");
+db.prepare('UPDATE classes SET subject_id=? WHERE subject_id IS NULL').run(en.id);   // 升级前的班都是英语班
+
+
 module.exports = { db, ROOT, DATA_DIR, CONTENT_DIR };

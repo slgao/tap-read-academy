@@ -91,42 +91,94 @@ on('GET', '/api/me', async (ctx) => {
   const classes = [];
   for (const id of ids) {
     const c = await repo.classes.byId(id);
-    if (c) classes.push({ id: c.id, name: c.name, inviteCode: c.inviteCode });
+    if (c) classes.push(await classView(c));
   }
   ok(ctx.res, { user: publicUser(ctx.user), classes });
 });
 
 /* 班级 */
+/** 年级段：同一科目按年级段分班 */
+const GRADE_BANDS = ['一二年级', '三四年级', '五六年级', '初中', '不分年级'];
+
+async function classView(c) {
+  return { id: c.id, name: c.name, inviteCode: c.inviteCode, teacherId: c.teacherId,
+    subject: subjectView(await repo.subjects.byId(c.subjectId)), gradeBand: c.gradeBand,
+    studentCount: await repo.classes.memberCount(c.id) };
+}
+
 on('GET', '/api/classes', async (ctx) => {
-  const ids = await repo.classes.idsForUser(ctx.user);
+  const subs = await repo.subjects.all();
   const rows = [];
-  for (const id of ids) {
+  for (const id of await repo.classes.idsForUser(ctx.user)) {
     const c = await repo.classes.byId(id);
-    if (!c) continue;
-    rows.push({ id: c.id, name: c.name, inviteCode: c.inviteCode, teacherId: c.teacherId,
-      studentCount: await repo.classes.memberCount(id) });
+    if (c) rows.push(await classView(c));
   }
+  // 按科目、年级段排好，界面直接分组显示
+  const sortOf = (r) => (subs.find((x) => r.subject && x.id === r.subject.id) || { sort: 99 }).sort;
+  const band = (r) => { const i = GRADE_BANDS.indexOf(r.gradeBand); return i < 0 ? 99 : i; };
+  rows.sort((a, b) => sortOf(a) - sortOf(b) || band(a) - band(b) || a.id - b.id);
   ok(ctx.res, rows);
 });
 
+on('GET', '/api/grade-bands', async (ctx) => ok(ctx.res, GRADE_BANDS), { auth: false });
+
+/** 校验班级表单；班名不填时按「年级段 + 科目 + 班」自动起名 */
+async function classForm(body) {
+  const subject = await repo.subjects.byId(body.subjectId);
+  if (!subject) return { error: '请选择科目' };
+  const gradeBand = String(body.gradeBand || '');
+  if (!GRADE_BANDS.includes(gradeBand)) return { error: '请选择年级段' };
+  const name = String(body.name || '').trim().slice(0, 30) || `${gradeBand === '不分年级' ? '' : gradeBand}${subject.name}班`;
+  return { subject, gradeBand, name };
+}
+
 on('POST', '/api/classes', async (ctx) => {
-  const name = String(ctx.body.name || '').trim();
-  if (!name) return fail(ctx.res, 1001, '请填写班级名');
+  const f = await classForm(ctx.body);
+  if (f.error) return fail(ctx.res, 1001, f.error);
   let code; let guard = 0;
   do { code = inviteCode(); guard++; } while (await repo.classes.inviteCodeTaken(code) && guard < 20);
 
-  const cls = await repo.classes.create({ name, inviteCode: code, teacherId: ctx.user.id });
+  const cls = await repo.classes.create({ name: f.name, inviteCode: code, teacherId: ctx.user.id, subjectId: f.subject.id, gradeBand: f.gradeBand });
   // 新班级默认可见全部教材（MVP 简化）
   for (const b of await repo.books.all()) await repo.books.grantToClass(b.id, cls.id);
-  ok(ctx.res, { id: cls.id, name: cls.name, inviteCode: cls.inviteCode });
+  ok(ctx.res, await classView(cls));
+}, { roles: ['teacher', 'admin'] });
+
+on('PUT', '/api/classes/:id', async (ctx) => {
+  const cls = await repo.classes.byId(ctx.params.id);
+  if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  if (ctx.user.role === 'teacher' && cls.teacherId !== ctx.user.id) return fail(ctx.res, 403, '只能修改自己带的班');
+  const f = await classForm(ctx.body);
+  if (f.error) return fail(ctx.res, 1001, f.error);
+  if (f.subject.id !== cls.subjectId && await repo.homeworks.countByClass(cls.id)) {
+    return fail(ctx.res, 3009, '这个班已经布置过作业，不能再改科目');
+  }
+  ok(ctx.res, await classView(await repo.classes.update(cls.id, { name: f.name, subjectId: f.subject.id, gradeBand: f.gradeBand })));
+}, { roles: ['teacher', 'admin'] });
+
+on('DELETE', '/api/classes/:id', async (ctx) => {
+  const cls = await repo.classes.byId(ctx.params.id);
+  if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  if (ctx.user.role === 'teacher' && cls.teacherId !== ctx.user.id) return fail(ctx.res, 403, '只能删除自己带的班');
+  if (await repo.homeworks.countByClass(cls.id)) return fail(ctx.res, 3009, '这个班布置过作业，不能删除');
+  await repo.classes.remove(cls.id);
+  ok(ctx.res, { ok: true });
+}, { roles: ['teacher', 'admin'] });
+
+on('DELETE', '/api/classes/:id/students/:sid', async (ctx) => {
+  const cls = await repo.classes.byId(ctx.params.id);
+  if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  if (ctx.user.role === 'teacher' && cls.teacherId !== ctx.user.id) return fail(ctx.res, 403, '只能管理自己带的班');
+  await repo.classes.removeMember(cls.id, ctx.params.sid);
+  ok(ctx.res, { ok: true });
 }, { roles: ['teacher', 'admin'] });
 
 on('POST', '/api/classes/join', async (ctx) => {
   const cls = await repo.classes.byInviteCode(String(ctx.body.inviteCode || '').toUpperCase().trim());
   if (!cls) return fail(ctx.res, 3001, '班级邀请码不存在');
   await repo.classes.addMember(cls.id, ctx.user.id);
-  ok(ctx.res, { id: cls.id, name: cls.name });
-});
+  ok(ctx.res, await classView(cls));
+}, { roles: ['student'] });
 
 on('GET', '/api/classes/:id/students', async (ctx) => {
   ok(ctx.res, await repo.classes.members(ctx.params.id));
@@ -278,7 +330,9 @@ on('POST', '/api/homeworks', async (ctx) => {
   const page = await repo.pages.byId(pageId);
   if (!page) return fail(ctx.res, 3003, '页面不存在');
   const lesson = await repo.lessons.byId(page.lessonId);
-  const subject = ctx.body.subjectId ? await repo.subjects.byId(ctx.body.subjectId) : await repo.subjects.byCode('en');
+  const cls = await repo.classes.byId(classId);
+  if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  const subject = await repo.subjects.byId(cls.subjectId) || await repo.subjects.byCode('en');   // 作业科目跟班级走
   const hw = await repo.homeworks.create({
     classId, teacherId: ctx.user.id, title: String(title), type: 'follow_read',
     bookId: lesson.bookId, pageId: page.id, hotspotIds, note, deadline, subjectId: subject ? subject.id : null,
@@ -315,10 +369,6 @@ async function hwBrief(hw, user) {
 on('GET', '/api/homeworks', async (ctx) => {
   const ids = await repo.classes.idsForUser(ctx.user);
   let rows = await repo.homeworks.byClassIds(ids);
-  if (ctx.user.role === 'teacher') {
-    const mine = await repo.subjects.idsForTeacher(ctx.user.id);
-    if (mine.length) rows = rows.filter((h) => mine.includes(h.subjectId));   // 老师只看自己教的科目
-  }
   if (ctx.query.subject) {
     const sub = await repo.subjects.byCode(ctx.query.subject);
     rows = sub ? rows.filter((h) => h.subjectId === sub.id) : [];
@@ -558,8 +608,10 @@ on('POST', '/api/homeworks/questions', async (ctx) => {
   const { classId, subjectId, title, note, deadline } = ctx.body;
   const list = Array.isArray(ctx.body.questions) ? ctx.body.questions : [];
   if (!classId || !String(title || '').trim()) return fail(ctx.res, 1001, '请选择班级并填写作业标题');
-  const subject = await repo.subjects.byId(subjectId);
-  if (!subject) return fail(ctx.res, 1001, '请选择科目');
+  const cls = await repo.classes.byId(classId);
+  if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  const subject = await repo.subjects.byId(cls.subjectId) || await repo.subjects.byId(subjectId);   // 作业科目跟班级走
+  if (!subject) return fail(ctx.res, 1001, '这个班还没设置科目');
   if (!list.length) return fail(ctx.res, 1001, '至少出一道题');
   if (list.length > 50) return fail(ctx.res, 1001, '一份作业最多 50 道题');
   for (let i = 0; i < list.length; i++) {

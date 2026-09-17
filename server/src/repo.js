@@ -23,6 +23,7 @@ const toUser = (r) => r && ({
 });
 const toClass = (r) => r && ({
   id: r.id, name: r.name, inviteCode: r.invite_code, teacherId: r.teacher_id, createdAt: r.created_at,
+  subjectId: r.subject_id, gradeBand: r.grade_band || '',
 });
 const toBook = (r) => r && ({
   id: r.id, title: r.title, subtitle: r.subtitle, grade: r.grade, cover: r.cover,
@@ -121,10 +122,23 @@ const classes = {
       ? q('SELECT class_id AS id FROM class_members WHERE student_id=?').all(num(user.id)).map((r) => r.id)
       : q('SELECT id FROM classes WHERE teacher_id=?').all(num(user.id)).map((r) => r.id);
   },
-  async create({ name, inviteCode, teacherId }) {
-    const r = q('INSERT INTO classes (name, invite_code, teacher_id, created_at) VALUES (?,?,?,?)')
-      .run(name, inviteCode, num(teacherId), now());
+  async create({ name, inviteCode, teacherId, subjectId, gradeBand }) {
+    const r = q('INSERT INTO classes (name, invite_code, teacher_id, subject_id, grade_band, created_at) VALUES (?,?,?,?,?,?)')
+      .run(name, inviteCode, num(teacherId), subjectId ? num(subjectId) : null, gradeBand || '', now());
     return classes.byId(Number(r.lastInsertRowid));
+  },
+  async update(id, { name, subjectId, gradeBand }) {
+    q('UPDATE classes SET name=?, subject_id=?, grade_band=? WHERE id=?').run(name, num(subjectId), gradeBand || '', num(id));
+    return classes.byId(id);
+  },
+  /** 删班：成员、教材授权一起删；有作业的班由调用方拦住 */
+  async remove(id) {
+    q('DELETE FROM class_members WHERE class_id=?').run(num(id));
+    q('DELETE FROM book_grants WHERE class_id=?').run(num(id));
+    q('DELETE FROM classes WHERE id=?').run(num(id));
+  },
+  async removeMember(classId, studentId) {
+    q('DELETE FROM class_members WHERE class_id=? AND student_id=?').run(num(classId), num(studentId));
   },
   async inviteCodeTaken(code) { return !!q('SELECT 1 x FROM classes WHERE invite_code=?').get(code); },
   async addMember(classId, studentId) {
@@ -286,6 +300,7 @@ const homeworks = {
   },
   async count() { return count('SELECT COUNT(*) n FROM homeworks'); },
   async countByBook(bookId) { return count('SELECT COUNT(*) n FROM homeworks WHERE book_id=?', num(bookId)); },
+  async countByClass(classId) { return count('SELECT COUNT(*) n FROM homeworks WHERE class_id=?', num(classId)); },
   async countByPage(pageId) { return count('SELECT COUNT(*) n FROM homeworks WHERE page_id=?', num(pageId)); },
   /** 连同提交记录一起删掉 */
   async remove(id) {

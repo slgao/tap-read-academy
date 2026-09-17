@@ -109,7 +109,7 @@ async function seed() {
   for (const n of ['李小明', '张小红', '刘小刚']) students.push(await ensureUser('student', n));
 
   let cls = await repo.classes.byInviteCode('DEMO88');
-  if (!cls) cls = await repo.classes.create({ name: '六年级 A 班', inviteCode: 'DEMO88', teacherId: teacher.id });
+  if (!cls) cls = await repo.classes.create({ name: '六年级 A 班', inviteCode: 'DEMO88', teacherId: teacher.id, subjectId: (await repo.subjects.byCode('en')).id, gradeBand: '五六年级' });
   for (const s of students) await repo.classes.addMember(cls.id, s.id);
 
   // --- 教材内容 ---

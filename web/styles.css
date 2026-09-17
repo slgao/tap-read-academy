@@ -507,3 +507,13 @@ div.field > span{display:block;font-size:13px;font-weight:700;color:var(--text-2
 .qed .btn.grey + label.field,.qed div.field > .btn{margin-top:2px}
 .share-acts{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
 .share-acts .btn{padding:6px 12px}
+
+/* ---------- 班级按科目分组 ---------- */
+.group-title{display:flex;align-items:center;gap:6px;font-size:16px;font-weight:800;color:var(--ink-deep);margin:18px 2px 10px}
+.group-title:first-child{margin-top:2px}
+.group-title::before{content:'';width:6px;height:18px;border-radius:3px;background:var(--ink)}
+.group-title.sky::before{background:var(--sky)} .group-title.coral::before{background:var(--coral)} .group-title.mint::before{background:var(--mint)} .group-title.star::before{background:var(--star)}
+.group-title .muted{margin-left:auto;font-weight:400}
+.card.cls.sky{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--sky)} .card.cls.coral{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--coral)}
+.card.cls.mint{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--mint)} .card.cls.star{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--star)}
+.class-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}

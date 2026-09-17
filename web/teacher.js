@@ -25,7 +25,7 @@
     $tab.hidden = !V.tab;
     if (V.tab) $tab.innerHTML = [['classes', '班级', TAB_IC.users], ['hwlist', '作业', TAB_IC.pencil], ['leads', '咨询', TAB_IC.phone], ['me', '我的', TAB_IC.user]]
       .map(([k, t, icon]) => `<button class="${S.view === k ? 'on' : ''}" data-go="${k}" aria-label="${t}"><span class="tab-ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></span>${t}</button>`).join('');
-    Promise.resolve(V.body()).then((h) => { $view.innerHTML = h; if (V.after) V.after(); })
+    return Promise.resolve(V.body()).then((h) => { $view.innerHTML = h; if (V.after) V.after(); })
       .catch((e) => { $view.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   }
 
@@ -46,6 +46,15 @@
   });
   document.addEventListener('change', async (e) => {
     const el = e.target;
+    if (el.id === 'f-class' && S.view === 'hwnew') {
+      S.newClassId = Number(el.value);
+      const title = document.getElementById('f-title'), note = document.getElementById('f-note');
+      const keep = { t: title ? title.value : '', n: note ? note.value : '' };
+      await render();
+      const t2 = document.getElementById('f-title'), n2 = document.getElementById('f-note');
+      if (t2) t2.value = keep.t; if (n2) n2.value = keep.n;
+      return;
+    }
     if (el.dataset.qimg != null) {
       const f = el.files && el.files[0]; if (!f) return;
       try { S.qs[Number(el.dataset.qimg)].img = await compressImage(f, 2000, 0.85); drawQs(); }
@@ -77,25 +86,61 @@
       </div>`,
   };
 
+  /* ---------- 班级：按科目开班，同一科目按年级段分班 ---------- */
   const CLASSES = {
-    top: () => `<h1><img src="brand/logo-96.png" alt="">班级</h1><button class="btn sm ghost" data-act="newClass">+ 新建</button>`, tab: true,
+    top: () => `<h1><img src="brand/logo-96.png" alt="">班级</h1><button class="btn sm ghost" data-go="classform" data-arg='{"clsId":null}'>+ 新建</button>`, tab: true,
     body: async () => {
       const cs = await API.get('/api/classes');
-      if (!cs.length) return `<div class="empty">还没有班级<br><span class="small">点右上角新建</span></div>`;
-      const blocks = [];
+      if (!cs.length) return `<div class="empty">还没有班级<br><span class="small">点右上角新建，先选科目和年级段</span></div>`;
+      const groups = [];
       for (const c of cs) {
-        const ss = await API.get(`/api/classes/${c.id}/students`);
-        blocks.push(`<div class="card">
-          <div class="row between"><div class="strong">${esc(c.name)}</div><span class="pill blue">邀请码 ${esc(c.inviteCode)}</span></div>
-          <div class="muted small mt">${ss.length} 名学生 · 学生在登录页输入邀请码即可加入</div>
-          <div class="hr"></div>
-          ${ss.length ? ss.map((s, i) => `<div class="row between" style="padding:6px 0">
-<span><i class="rank ${i < 3 ? 'top' : ''}">${i + 1}</i>${esc(s.name)}</span>
-              <span class="muted small">${s.stars} 星 · 连续 ${s.streak} 天</span></div>`).join('')
-            : '<div class="muted small">还没有学生加入</div>'}
-        </div>`);
+        const key = c.subject ? c.subject.code : '';
+        let g = groups.find((x) => x.key === key);
+        if (!g) groups.push(g = { key, subject: c.subject, list: [] });
+        g.list.push(c);
       }
-      return blocks.join('');
+      const out = [];
+      for (const g of groups) {
+        const cards = [];
+        for (const c of g.list) {
+          const ss = await API.get(`/api/classes/${c.id}/students`);
+          cards.push(`<div class="card cls ${g.subject ? esc(g.subject.color) : ''}">
+            <div class="row between"><div class="strong grow ellip">${esc(c.name)}</div>
+              <button class="btn sm grey" data-go="classform" data-arg='${JSON.stringify({ clsId: c.id })}'>管理</button></div>
+            <div class="row mt" style="gap:6px;flex-wrap:wrap">${c.gradeBand ? `<span class="pill">${esc(c.gradeBand)}</span>` : ''}
+              <span class="pill blue">邀请码 ${esc(c.inviteCode)}</span><span class="muted small">${ss.length} 名学生</span></div>
+            ${ss.length ? `<div class="hr"></div>${ss.map((st, i) => `<div class="row between" style="padding:5px 0">
+              <span><i class="rank ${i < 3 ? 'top' : ''}">${i + 1}</i>${esc(st.name)}</span>
+              <span class="muted small">${st.stars} 星 · 连续 ${st.streak} 天</span></div>`).join('')}`
+              : '<div class="muted small mt">还没有学生。把邀请码发给家长，孩子登录或在「我的」里输入邀请码就能进班</div>'}
+          </div>`);
+        }
+        out.push(`<div class="group-title ${g.subject ? esc(g.subject.color) : ''}">${g.subject ? esc(g.subject.name) : '未设科目'}<span class="muted small">${g.list.length} 个班</span></div>${cards.join('')}`);
+      }
+      return out.join('');
+    },
+  };
+
+  const CLASSFORM = {
+    top: () => `<button class="back" data-go="classes">‹</button><h1>${S.clsId ? '管理班级' : '新建班级'}</h1>`, noTab: true,
+    body: async () => {
+      const [subj, bands, cs] = await Promise.all([API.get('/api/subjects'), API.get('/api/grade-bands'), API.get('/api/classes')]);
+      const c = S.clsId ? cs.find((x) => x.id === S.clsId) : null;
+      if (S.clsId && !c) return `<div class="empty">班级不存在</div>`;
+      const ss = c ? await API.get(`/api/classes/${c.id}/students`) : [];
+      const subId = c && c.subject ? c.subject.id : null;
+      return `<div class="card">
+        <div class="field"><span>科目</span><div class="chips">${subj.subjects.map((x) => `<label class="chip ${esc(x.color)}"><input type="radio" name="c-subj" value="${x.id}"${x.id === subId ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('')}</div></div>
+        <div class="field"><span>年级段</span><div class="chips">${bands.map((b) => `<label class="chip"><input type="radio" name="c-band" value="${esc(b)}"${c && c.gradeBand === b ? ' checked' : ''}><span>${esc(b)}</span></label>`).join('')}</div></div>
+        <label class="field"><span>班级名称（可不填，自动叫「三四年级书法班」这样）</span><input id="c-name" value="${c ? esc(c.name) : ''}" placeholder="也可以写上课时间，比如：书法 周六上午班"></label>
+        <button class="btn block" data-act="saveClass">${c ? '保存' : '创建班级'}</button>
+      </div>
+      ${c ? `<div class="card"><div class="row between"><div class="section-title">学生 ${ss.length} 人</div><span class="pill blue">邀请码 ${esc(c.inviteCode)}</span></div>
+        ${ss.map((st) => `<div class="row between" style="padding:7px 0;border-top:1px solid var(--line)"><span>${esc(st.name)}</span>
+          <button class="btn sm danger" data-act="kickStudent" data-sid="${st.id}" data-name="${esc(st.name)}">移出</button></div>`).join('') || '<div class="muted small mt">还没有学生</div>'}
+      </div>
+      <div class="card"><div class="row between"><span class="muted small">没布置过作业的班可以删除</span>
+        <button class="btn sm danger" data-act="delClass">删除班级</button></div></div>` : ''}`;
     },
   };
 
@@ -116,21 +161,23 @@
   const HWNEW = {
     top: () => `<button class="back" data-go="hwlist">‹</button><h1>布置作业</h1>`, noTab: true,
     body: async () => {
-      const [classes, books, subj] = await Promise.all([API.get('/api/classes'), API.get('/api/books'), API.get('/api/subjects')]);
-      if (!classes.length) return `<div class="empty">请先建班级</div>`;
-      const seg = `<div class="seg mb">
+      const [classes, books] = await Promise.all([API.get('/api/classes'), API.get('/api/books')]);
+      if (!classes.length) return `<div class="empty">请先建班级<br><span class="small">在「班级」里点「+ 新建」</span></div>`;
+      // 作业布置给班级，科目跟着班级走；只有英语班能布置课本跟读
+      if (!classes.some((c) => c.id === S.newClassId)) S.newClassId = classes[0].id;
+      const cur = classes.find((c) => c.id === S.newClassId);
+      const isEn = !cur.subject || cur.subject.code === 'en';
+      if (!isEn) S.newKind = 'questions';
+      const classSel = `<div class="card"><label class="field" style="margin-bottom:0"><span>布置给哪个班</span><select id="f-class">${classes.map((c) =>
+        `<option value="${c.id}"${c.id === S.newClassId ? ' selected' : ''}>${c.subject ? esc(c.subject.name) + ' · ' : ''}${esc(c.name)}（${c.studentCount}人）</option>`).join('')}</select></label></div>`;
+      const seg = isEn ? `<div class="seg mb">
           <button class="${S.newKind === 'questions' ? 'on' : ''}" data-act="newKind" data-k="questions">题目作业</button>
           <button class="${S.newKind === 'follow_read' ? 'on' : ''}" data-act="newKind" data-k="follow_read">课本跟读</button>
-        </div>`;
-      const classSel = `<label class="field"><span>班级</span><select id="f-class">${classes.map((c) => `<option value="${c.id}">${esc(c.name)}（${c.studentCount}人）</option>`).join('')}</select></label>`;
+        </div>` : '';
       if (S.newKind === 'questions') {
-        // 老师设了自己教的科目就只列这些，否则列全部；默认选第一个非英语科目
-        const list = subj.mine.length ? subj.subjects.filter((x) => subj.mine.includes(x.id)) : subj.subjects;
-        const def = S.qSubject || (list.find((x) => x.code !== 'en') || list[0] || {}).id;
         if (!S.qs.length) S.qs = [newQ('single')];
-        return `${seg}
-        <div class="card">${classSel}
-          <label class="field"><span>科目</span><select id="f-subj" data-act="noop">${list.map((x) => `<option value="${x.id}"${x.id === def ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+        return `${classSel}${seg}
+        <div class="card">
           <label class="field"><span>作业标题</span><input id="f-title" placeholder="例如：第三单元 口算练习"></label>
           <label class="field" style="margin-bottom:0"><span>给学生的话（可选）</span><textarea id="f-note" rows="2" placeholder="写完检查一遍再交"></textarea></label>
         </div>
@@ -142,7 +189,7 @@
         <button class="btn block" data-act="createQHw">发布作业</button>`;
       }
       S.pick.bookId = S.pick.bookId || (books[0] && books[0].id);
-      return `${seg}<div class="card">${classSel}
+      return `${classSel}${seg}<div class="card">
         <label class="field"><span>教材</span><select id="f-book" data-act="pickBook">${books.map((b) => `<option value="${b.id}">${esc(b.title)}</option>`).join('')}</select></label>
         <label class="field"><span>页面</span><select id="f-page" data-act="pickPage"><option>加载中…</option></select></label>
       </div>
@@ -345,22 +392,18 @@
   const ME = {
     top: () => `<h1><img src="brand/logo-96.png" alt="">我的</h1>`, tab: true,
     body: async () => {
-      const [st, subj] = await Promise.all([API.get('/api/admin/stats'), API.get('/api/subjects')]);
+      const st = await API.get('/api/admin/stats');
       return `<div class="hero"><h2>${esc((Store.user || {}).name || '')}</h2><div class="small">福斯特培训学校 · 老师</div>
         <div class="stats"><div><b>${st.students}</b><span>学生</span></div><div><b>${st.homeworks}</b><span>作业</span></div>
         <div><b>${st.submissions}</b><span>提交</span></div></div></div>
       <div class="card"><div class="section-title mb">教材内容</div>
         <div class="row between"><span class="muted small">教材 ${st.books} 本 · 页面 ${st.pages} 页 · 热区 ${st.hotspots} 个</span>
         <a class="btn sm ghost" href="admin.html" target="_blank">打开内容后台</a></div></div>
-      <div class="card"><div class="section-title mb">我教的科目</div>
-        <div class="chips" id="my-subj">${subj.subjects.map((x) => `<label class="chip ${esc(x.color)}"><input type="checkbox" value="${x.id}"${subj.mine.includes(x.id) ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('')}</div>
-        <div class="row between mt"><span class="muted small">「作业」里只显示勾选的科目；都不勾就显示全部</span>
-          <button class="btn sm" data-act="saveSubj">保存</button></div></div>
       <div class="card"><div class="row between"><span>切换账号</span><button class="btn sm grey" data-act="logout">退出登录</button></div></div>`;
     },
   };
 
-  const VIEWS = { login: LOGIN, classes: CLASSES, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
+  const VIEWS = { login: LOGIN, classes: CLASSES, classform: CLASSFORM, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
 
   const ACT = {
     async login() {
@@ -370,10 +413,26 @@
       catch (e) { toast(e.message); }
     },
     logout() { Store.clear(); go('login'); },
-    async newClass() {
-      const name = prompt('班级名称', '新班级');
-      if (!name) return;
-      try { const c = await API.post('/api/classes', { name }); toast('已创建，邀请码 ' + c.inviteCode, 2600); render(); }
+    async saveClass(el) {
+      const sub = document.querySelector('input[name="c-subj"]:checked');
+      const band = document.querySelector('input[name="c-band"]:checked');
+      if (!sub) return toast('请选科目');
+      if (!band) return toast('请选年级段');
+      const body = { subjectId: Number(sub.value), gradeBand: band.value, name: document.getElementById('c-name').value.trim() };
+      el.disabled = true;
+      try {
+        const c = S.clsId ? await API.put('/api/classes/' + S.clsId, body) : await API.post('/api/classes', body);
+        toast(S.clsId ? '已保存' : `已创建「${c.name}」，邀请码 ${c.inviteCode}`, 2800); go('classes');
+      } catch (e) { toast(e.message, 2600); el.disabled = false; }
+    },
+    async delClass() {
+      if (!confirm('删除这个班？学生会被移出，但学生账号还在')) return;
+      try { await API.del('/api/classes/' + S.clsId); toast('已删除'); go('classes'); }
+      catch (e) { toast(e.message, 2600); }
+    },
+    async kickStudent(el) {
+      if (!confirm(`把 ${el.dataset.name} 移出这个班？`)) return;
+      try { await API.del(`/api/classes/${S.clsId}/students/${el.dataset.sid}`); toast('已移出'); render(); }
       catch (e) { toast(e.message); }
     },
     pickBook() { loadPages(); },
@@ -441,7 +500,7 @@
       el.disabled = true; el.textContent = '发布中…';
       try {
         await API.post('/api/homeworks/questions', {
-          classId: Number(document.getElementById('f-class').value), subjectId: Number(document.getElementById('f-subj').value),
+          classId: Number(document.getElementById('f-class').value),
           title, note: document.getElementById('f-note').value.trim(), questions,
         });
         S.qs = []; toast('作业已发布'); go('hwlist');
@@ -470,11 +529,6 @@
     async leadDel(el) {
       if (!confirm('删除这条预约？删除后找不回来')) return;
       try { await API.del('/api/admin/leads/' + el.dataset.id); toast('已删除'); render(); }
-      catch (e) { toast(e.message); }
-    },
-    async saveSubj() {
-      const ids = [...document.querySelectorAll('#my-subj input:checked')].map((x) => Number(x.value));
-      try { await API.put('/api/me/subjects', { subjectIds: ids }); toast('已保存'); }
       catch (e) { toast(e.message); }
     },
     playRec(el) { const u = el.dataset.url; if (!u) return toast('没有录音'); Clip.play(u, el); },

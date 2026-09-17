@@ -171,11 +171,26 @@ const TAG = '__e2e_' + Date.now();
   const calli = subj.subjects.find((x) => x.code === 'calli');
   check('四个科目', ['en', 'zh', 'math', 'calli'].every((c) => subj.subjects.some((x) => x.code === c)), subj.subjects.map((x) => x.name).join('、'));
 
-  const badQ = await expectFail('POST', '/api/homeworks/questions', { classId: cls.id, subjectId: math.id, title: TAG + ' 坏题',
+  // 机构按科目开班、同科目按年级段分班；学生可以同时在几个科目的班里
+  const badCls = await expectFail('POST', '/api/classes', { subjectId: math.id, gradeBand: '高中' }, T.token);
+  check('建班：年级段不对被拒', /年级段/.test(badCls || ''), badCls);
+  const mathCls = await call('POST', '/api/classes', { subjectId: math.id, gradeBand: '三四年级' }, T.token);
+  const calliCls = await call('POST', '/api/classes', { subjectId: calli.id, gradeBand: '不分年级', name: TAG + ' 书法周六班' }, T.token);
+  check('建班：不填班名自动起名', mathCls.name === '三四年级数学班' && mathCls.subject.code === 'math', mathCls.name);
+  const joined = await call('POST', '/api/classes/join', { inviteCode: mathCls.inviteCode }, S.token);
+  await call('POST', '/api/classes/join', { inviteCode: calliCls.inviteCode.toLowerCase() }, S.token);
+  const sMe = await call('GET', '/api/me', null, S.token);
+  check('学生同时在英语、数学、书法班', joined.subject.code === 'math' && ['en', 'math', 'calli'].every((c) => sMe.classes.some((x) => x.subject && x.subject.code === c)),
+    sMe.classes.map((x) => x.name).join('、'));
+  const tCls = await call('GET', '/api/classes', null, T.token);
+  const order = tCls.map((x) => x.subject.code).filter((c, i, a) => a.indexOf(c) === i);
+  check('老师的班按科目排序', order.indexOf('en') < order.indexOf('math') && order.indexOf('math') < order.indexOf('calli'), order.join(' > '));
+
+  const badQ = await expectFail('POST', '/api/homeworks/questions', { classId: mathCls.id, title: TAG + ' 坏题',
     questions: [{ type: 'single', score: 2, stem: '1+1', options: ['1', '2'] }] }, T.token);
   check('出题校验：没标正确选项被拒', /正确选项/.test(badQ || ''), badQ);
 
-  const qhw = await call('POST', '/api/homeworks/questions', { classId: cls.id, subjectId: math.id, title: TAG + ' 数学练习', note: '认真写过程',
+  const qhw = await call('POST', '/api/homeworks/questions', { classId: mathCls.id, subjectId: calli.id, title: TAG + ' 数学练习', note: '认真写过程',
     questions: [
       { type: 'single', score: 2, stem: '1+1=?', options: ['1', '2', '3'], answer: 1, analysis: '一加一等于二' },
       { type: 'multi', score: 2, stem: '哪些是偶数', options: ['2', '3', '4'], answer: [0, 2] },
@@ -185,7 +200,11 @@ const TAG = '__e2e_' + Date.now();
     ] }, T.token);
   const sView = await call('GET', `/api/homeworks/${qhw.id}`, null, S.token);
   check('学生看到题目但看不到答案', sView.questions.length === 5 && sView.questions.every((x) => x.answer === undefined)
-    && sView.subject.code === 'math' && !!sView.questions[4].stemImage, `${sView.subject.name} ${sView.questions.length} 题`);
+    && sView.subject.code === 'math' && !!sView.questions[4].stemImage, `${sView.subject.name} ${sView.questions.length} 题（科目跟班级走）`);
+  const chg = await expectFail('PUT', `/api/classes/${mathCls.id}`, { subjectId: calli.id, gradeBand: '三四年级' }, T.token);
+  check('布置过作业的班不能改科目', /不能再改科目/.test(chg || ''), chg);
+  const delHw = await expectFail('DELETE', `/api/classes/${mathCls.id}`, null, T.token);
+  check('布置过作业的班不能删', /不能删除/.test(delHw || ''), delHw);
 
   const noPhoto = await expectFail('POST', `/api/homeworks/${qhw.id}/answers`, { answers: [
     { questionId: sView.questions[0].id, value: 1 } ] }, S.token);
@@ -211,7 +230,7 @@ const TAG = '__e2e_' + Date.now();
   check('批改后学生能看到答案、解析和优秀', sAfter.mySubmission.excellent && sAfter.questions[0].answer === 1 && sAfter.questions[0].analysis === '一加一等于二',
     `优秀=${sAfter.mySubmission.excellent}`);
 
-  const allAuto = await call('POST', '/api/homeworks/questions', { classId: cls.id, subjectId: math.id, title: TAG + ' 口算',
+  const allAuto = await call('POST', '/api/homeworks/questions', { classId: mathCls.id, title: TAG + ' 口算',
     questions: [{ type: 'blank', score: 5, stem: '7×8=___', answer: { blanks: [['56']] } }] }, T.token);
   const autoV = await call('GET', `/api/homeworks/${allAuto.id}`, null, S.token);
   const autoR = await call('POST', `/api/homeworks/${allAuto.id}/answers`, { answers: [{ questionId: autoV.questions[0].id, value: ['56'] }] }, S.token);
@@ -232,7 +251,7 @@ const TAG = '__e2e_' + Date.now();
   const notExcellent = await expectFail('POST', '/api/shares', { type: 'praise', submissionId: autoR.submissionId, imageBase64: PRAISE }, S.token);
   check('没被评优秀不能生成喜报', /优秀作业/.test(notExcellent || ''), notExcellent);
 
-  const chw = await call('POST', '/api/homeworks/questions', { classId: cls.id, subjectId: calli.id, title: TAG + ' 书法',
+  const chw = await call('POST', '/api/homeworks/questions', { classId: calliCls.id, title: TAG + ' 书法',
     questions: [{ type: 'photo', score: 10, stem: '临写"永"字八法' }] }, T.token);
   const cv = await call('GET', `/api/homeworks/${chw.id}`, null, S.token);
   const cr = await call('POST', `/api/homeworks/${chw.id}/answers`, { answers: [{ questionId: cv.questions[0].id, photos: [JPG, JPG] }] }, S.token);
@@ -266,6 +285,9 @@ const TAG = '__e2e_' + Date.now();
   for (const l of myLead) await call('DELETE', `/api/admin/leads/${l.id}`, null, T.token);
   await call('POST', `/api/shares/${work.id}/revoke`, null, S.token);
   for (const id of [qhw.id, allAuto.id, chw.id]) await call('DELETE', `/api/homeworks/${id}`, null, T.token);
+  for (const c of [mathCls, calliCls]) await call('DELETE', `/api/classes/${c.id}`, null, T.token);
+  const afterDel = await call("GET", "/api/me", null, S.token);
+  check('删班后学生不再在这些班里', !afterDel.classes.some((x) => [mathCls.id, calliCls.id].includes(x.id)), afterDel.classes.map((x) => x.name).join('、'));
 
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);
