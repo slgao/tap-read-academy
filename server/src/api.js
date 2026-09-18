@@ -219,9 +219,14 @@ on('GET', '/api/classes', async (ctx) => {
 on('GET', '/api/grade-bands', async (ctx) => ok(ctx.res, GRADE_BANDS), { auth: false });
 
 /** 校验班级表单；班名不填时按「年级段 + 科目 + 班」自动起名 */
-async function classForm(body) {
+async function classForm(body, user) {
   const subject = await repo.subjects.byId(body.subjectId);
   if (!subject) return { error: '请选择科目' };
+  // 老师只能开自己教的科目；负责人不限。没给老师设科目时不拦（老账号照常用）
+  if (user && user.role === 'teacher') {
+    const mine = await repo.subjects.idsForTeacher(user.id);
+    if (mine.length && !mine.includes(subject.id)) return { error: `你教的科目里没有「${subject.name}」，请让负责人先加上` };
+  }
   const gradeBand = String(body.gradeBand || '');
   if (!GRADE_BANDS.includes(gradeBand)) return { error: '请选择年级段' };
   const name = String(body.name || '').trim().slice(0, 30) || `${gradeBand === '不分年级' ? '' : gradeBand}${subject.name}班`;
@@ -229,7 +234,7 @@ async function classForm(body) {
 }
 
 on('POST', '/api/classes', async (ctx) => {
-  const f = await classForm(ctx.body);
+  const f = await classForm(ctx.body, ctx.user);
   if (f.error) return fail(ctx.res, 1001, f.error);
   let code; let guard = 0;
   do { code = inviteCode(); guard++; } while (await repo.classes.inviteCodeTaken(code) && guard < 20);
@@ -251,7 +256,7 @@ on('PUT', '/api/classes/:id', async (ctx) => {
   const cls = await repo.classes.byId(ctx.params.id);
   if (!cls) return fail(ctx.res, 3001, '班级不存在');
   if (ctx.user.role === 'teacher' && cls.teacherId !== ctx.user.id) return fail(ctx.res, 403, '只能修改自己带的班');
-  const f = await classForm(ctx.body);
+  const f = await classForm(ctx.body, ctx.user);
   if (f.error) return fail(ctx.res, 1001, f.error);
   if (f.subject.id !== cls.subjectId && await repo.homeworks.countByClass(cls.id)) {
     return fail(ctx.res, 3009, '这个班已经布置过作业，不能再改科目');
@@ -479,6 +484,7 @@ async function hwBrief(hw, user, pre) {
     out.reviewed = await repo.submissions.countReviewed(hw.id);
     out.total = await repo.classes.memberCount(hw.classId);
   }
+  if (user.role !== 'student') out.pending = Math.max(0, (out.submitted || 0) - (out.reviewed || 0));   // 还等着批改的份数
   return out;
 }
 
@@ -758,10 +764,13 @@ on('GET', '/api/admin/stats', async (ctx) => {
 
 /* ================= 教职工账号（负责人管理） ================= */
 on('GET', '/api/admin/teachers', async (ctx) => {
+  const staff = await repo.users.staff();
+  const mineSubjects = await repo.subjects.byTeachers(staff.map((u) => u.id));
   const out = [];
-  for (const u of await repo.users.staff()) {
+  for (const u of staff) {
     out.push({ id: u.id, name: u.name, role: u.role, roleName: ROLE_NAME[u.role] || u.role,
       active: !!u.active, hasCode: !!u.loginCode, isMe: u.id === ctx.user.id,
+      subjectIds: mineSubjects.get(u.id) || [],
       classCount: await repo.classes.countByTeacher(u.id), createdAt: u.createdAt });
   }
   ok(ctx.res, out);
@@ -790,6 +799,16 @@ on('POST', '/api/admin/teachers/:id/code', async (ctx) => {
   const code = staffCode();
   await repo.users.setLoginCode(u.id, sha256(code));
   ok(ctx.res, { id: u.id, name: u.name, code });
+}, { roles: ['admin'] });
+
+/** 负责人给老师分科目：定了科目，这位老师就只能开这些科目的班 */
+on('PUT', '/api/admin/teachers/:id/subjects', async (ctx) => {
+  const u = await repo.users.byId(ctx.params.id);
+  if (!u || u.role === 'student') return fail(ctx.res, 3013, '账号不存在');
+  const all = await repo.subjects.all();
+  const ids = (Array.isArray(ctx.body.subjectIds) ? ctx.body.subjectIds : []).map(Number).filter((id) => all.some((x) => x.id === id));
+  await repo.subjects.setForTeacher(u.id, ids);
+  ok(ctx.res, { subjectIds: ids });
 }, { roles: ['admin'] });
 
 on('PUT', '/api/admin/teachers/:id', async (ctx) => {
@@ -1230,7 +1249,7 @@ on('DELETE', '/api/admin/packages/:id', async (ctx) => {
 }, { roles: ['admin'] });
 
 /* ---------- 点名：到课扣课时，已批准的请假不扣 ---------- */
-const ATT_STATUS = ['present', 'leave', 'absent'];
+const ATT_STATUS = ['present', 'leave', 'absent', 'clear'];   // clear = 删掉这次记录并退回课时
 
 on('GET', '/api/classes/:id/attendance', async (ctx) => {
   const cls = await repo.classes.byId(ctx.params.id);
@@ -1273,6 +1292,11 @@ on('POST', '/api/classes/:id/attendance', async (ctx) => {
       await repo.packages.addUsed(prev.packageId, -prev.hours);
       await repo.hourLogs.add({ packageId: prev.packageId, studentId: prev.studentId, hours: prev.hours,
         reason: 'revert', refId: prev.id, date, note: '修改点名，退回课时', createdBy: ctx.user.id });
+    }
+    if (r.status === 'clear') {                        // 点错了：记录删掉，课时上面已经退回
+      if (prev) await repo.attendance.remove(prev.id);
+      marked++;
+      continue;
     }
     const hours = r.status === 'leave' ? 0 : (Number(r.hours) > 0 ? Number(r.hours) : per);
     let pkg = null;
@@ -1439,7 +1463,8 @@ on('GET', '/api/admin/attendance-grid', async (ctx) => {
   const dates = [...new Set(rows.map((r) => r.date))].sort();
   const members = await repo.classes.members(cls.id);
   ok(ctx.res, {
-    month, className: cls.name, dates,
+    month, classId: cls.id, className: cls.name, dates,
+    defaultHours: await repo.settings.get('hours_class_' + cls.id, 1),
     students: members.map((m) => ({ id: m.id, name: m.name,
       marks: dates.map((d) => { const r = rows.find((x) => x.studentId === m.id && x.date === d); return r ? { status: r.status, hours: r.hours } : null; }),
       used: rows.filter((x) => x.studentId === m.id).reduce((a, b) => a + (b.hours || 0), 0) })),

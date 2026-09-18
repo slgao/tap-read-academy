@@ -164,19 +164,25 @@
     body: async () => {
       const cs = await API.get('/api/classes');
       if (!cs.length) return `<div class="empty">还没有班级<br><span class="small">点右上角新建，先选科目和年级段</span></div>`;
+      // 负责人也带课：自己的班排前面，别人的班压暗显示（仍然可以管理）
+      const myId = (Store.user || {}).id;
+      const mine = cs.filter((c) => c.teacherId === myId);
+      const others = cs.filter((c) => c.teacherId !== myId);
       const groups = [];
-      for (const c of cs) {
-        const key = c.subject ? c.subject.code : '';
+      const push = (c, dim) => {
+        const key = (c.subject ? c.subject.code : '') + (dim ? '_o' : '');
         let g = groups.find((x) => x.key === key);
-        if (!g) groups.push(g = { key, subject: c.subject, list: [] });
+        if (!g) groups.push(g = { key, subject: c.subject, dim, list: [] });
         g.list.push(c);
-      }
+      };
+      mine.forEach((c) => push(c, false));
+      others.forEach((c) => push(c, true));
       const out = [];
       for (const g of groups) {
         const cards = [];
         for (const c of g.list) {
           const ss = await API.get(`/api/classes/${c.id}/students`);
-          cards.push(`<div class="card cls ${g.subject ? esc(g.subject.color) : ''}">
+          cards.push(`<div class="card cls ${g.subject ? esc(g.subject.color) : ''} ${g.dim ? 'dim' : ''}">
             <div class="row between"><div class="strong grow ellip">${esc(c.name)}</div>
               <div class="row" style="gap:6px">
                 <button class="btn sm mint" data-go="roll" data-arg='${JSON.stringify({ clsId: c.id, rollDate: null })}'>点名</button>
@@ -190,7 +196,8 @@
               : '<div class="muted small mt">还没有学生。把邀请码发给家长，孩子登录或在「我的」里输入邀请码就能进班</div>'}
           </div>`);
         }
-        out.push(`<div class="group-title ${g.subject ? esc(g.subject.color) : ''}">${g.subject ? esc(g.subject.name) : '未设科目'}<span class="muted small">${g.list.length} 个班</span></div>${cards.join('')}`);
+        out.push(`<div class="group-title ${g.subject ? esc(g.subject.color) : ''} ${g.dim ? 'dim' : ''}">${g.subject ? esc(g.subject.name) : '未设科目'}
+          <span class="muted small">${g.dim ? '别的老师带 · ' : ''}${g.list.length} 个班</span></div>${cards.join('')}`);
       }
       return out.join('');
     },
@@ -206,11 +213,16 @@
       const subId = c && c.subject ? c.subject.id : null;
       // 负责人可以指定这个班归谁带；老师自己建的班就是自己的
       const staff = isAdmin() ? (await API.get('/api/admin/teachers')).filter((u) => u.active) : [];
+      // 老师只能开自己教的科目；负责人不限
+      const myIds = subj.mine || [];
+      const subjList = (!isAdmin() && myIds.length) ? subj.subjects.filter((x) => myIds.includes(x.id)) : subj.subjects;
       const curT = c ? c.teacherId : (Store.user || {}).id;
       const teacherField = staff.length ? `<label class="field"><span>任课老师</span><select id="c-teacher">${
         staff.map((u) => `<option value="${u.id}"${u.id === curT ? ' selected' : ''}>${esc(u.name)}${u.role === 'admin' ? '（负责人）' : ''}</option>`).join('')}</select></label>` : '';
       return `<div class="card">
-        <div class="field"><span>科目</span><div class="chips">${subj.subjects.map((x) => `<label class="chip ${esc(x.color)}"><input type="radio" name="c-subj" value="${x.id}"${x.id === subId ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('')}</div></div>
+        <div class="field"><span>科目${!isAdmin() && myIds.length ? '（你教的科目）' : ''}</span>
+          <div class="chips">${subjList.map((x) => `<label class="chip ${esc(x.color)}"><input type="radio" name="c-subj" value="${x.id}"${x.id === subId ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('')}</div>
+          ${!isAdmin() && !myIds.length ? '<div class="muted small mt">负责人还没给你设科目，现在可以选全部</div>' : ''}</div>
         <div class="field"><span>年级段</span><div class="chips">${bands.map((b) => `<label class="chip"><input type="radio" name="c-band" value="${esc(b)}"${c && c.gradeBand === b ? ' checked' : ''}><span>${esc(b)}</span></label>`).join('')}</div></div>
         <label class="field"><span>班级名称（可不填，自动叫「三四年级书法班」这样）</span><input id="c-name" value="${c ? esc(c.name) : ''}" placeholder="也可以写上课时间，比如：书法 周六上午班"></label>
         ${teacherField}
@@ -230,12 +242,20 @@
     body: async () => {
       const hws = await API.get('/api/homeworks');
       if (!hws.length) return `<div class="empty">还没布置过作业<br><span class="small">点右上角「+ 布置」</span></div>`;
-      return hws.map((h) => `<div class="hwitem" data-go="review" data-arg='${JSON.stringify({ hwId: h.id })}'>
+      // 待批改的排最前面，标红显示份数；剩下的按"还没交齐"和"全批完"分开
+      const todo = hws.filter((h) => h.pending > 0);
+      const rest = hws.filter((h) => !h.pending);
+      const item = (h) => `<div class="hwitem ${h.pending ? 'hw-todo' : ''}" data-go="review" data-arg='${JSON.stringify({ hwId: h.id })}'>
         <div class="row between"><div class="strong ellip grow">${subjTag(h.subject)}${esc(h.title)}</div>
-          <span class="pill ${h.submitted >= h.total && h.total ? 'ok' : 'warn'}">${h.submitted}/${h.total} 已交</span></div>
+          ${h.pending ? `<span class="pill todo">${h.pending} 份待批改</span>`
+            : `<span class="pill ${h.submitted >= h.total && h.total ? 'ok' : ''}">${h.submitted >= h.total && h.total ? '全批完' : `${h.submitted}/${h.total} 已交`}</span>`}</div>
         <div class="muted small mt">${h.kind === 'questions' ? `${h.itemCount} 道题` : `${h.itemCount} 句跟读`} · ${esc(h.className)} · ${fmtDate(h.createdAt)}
-          ${h.reviewed ? ` · 已批改 ${h.reviewed}` : ''}</div>
-      </div>`).join('');
+          · 已交 ${h.submitted}/${h.total}${h.reviewed ? ` · 已批 ${h.reviewed}` : ''}</div>
+      </div>`;
+      return `${todo.length ? `<div class="row between mb"><div class="section-title">待批改</div>
+          <span class="pill todo">${todo.reduce((a, b) => a + b.pending, 0)} 份</span></div>
+        ${todo.map(item).join('')}` : '<div class="card tight mb"><div class="strong">作业都批完了</div></div>'}
+        ${rest.length ? `<div class="section-title mb mt">其他作业</div>${rest.map(item).join('')}` : ''}`;
     },
   };
 
@@ -748,7 +768,8 @@
   const STAFF = {
     top: () => `<button class="back" data-go="me">‹</button><h1>老师账号</h1><button class="btn sm" data-act="newStaff">+ 新建</button>`, noTab: true,
     body: async () => {
-      const list = await API.get('/api/admin/teachers');
+      const [list, subj] = await Promise.all([API.get('/api/admin/teachers'), API.get('/api/subjects')]);
+      S.subjects = subj.subjects;
       return `<div class="card tight mb"><div class="muted small">
           每位老师用「姓名 + 自己的口令」登录，只能看到自己带的班和作业；家长预约、教材内容只有负责人能看。
           老师忘了口令就点「重置口令」，系统会生成一个新的，旧的立刻失效。</div></div>
@@ -759,6 +780,9 @@
               ${u.active ? '' : '<span class="pill todo">已停用</span>'}</div>
           </div>
           <div class="muted small mt">${u.classCount} 个班${u.role === 'admin' || u.hasCode ? '' : ' · 还没有口令，先点「重置口令」'}${u.isMe ? ' · 当前登录' : ''}</div>
+          <div class="field mt" style="margin-bottom:6px"><span>教的科目${u.role === 'admin' ? '（负责人不受限制，这里是她自己带的课）' : '（决定他能开哪些科目的班）'}</span>
+            <div class="chips">${S.subjects.map((x) => `<label class="chip ${esc(x.color)}"><input type="checkbox" data-subj-of="${u.id}" value="${x.id}"${(u.subjectIds || []).includes(x.id) ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('')}</div>
+            <button class="btn sm ghost mt" data-act="saveSubjects" data-id="${u.id}" data-name="${esc(u.name)}">保存科目</button></div>
           ${u.role === 'admin' && u.isMe ? `<div class="row between mt"><span class="muted small">负责人用部署时设置的主口令登录</span>
             <button class="btn sm grey" data-act="renameStaff" data-id="${u.id}" data-name="${esc(u.name)}">改名</button></div>` : `
           <div class="row mt" style="gap:8px;flex-wrap:wrap">
@@ -989,6 +1013,14 @@
           Store.user = { ...me, name };
           toast('改好了。下次登录请用新名字加原来的口令', 3200);
         } else toast('改好了，口令不变');
+        render();
+      } catch (e) { toast(e.message, 2600); }
+    },
+    async saveSubjects(el) {
+      const ids = [...document.querySelectorAll(`[data-subj-of="${el.dataset.id}"]:checked`)].map((x) => Number(x.value));
+      try {
+        await API.put(`/api/admin/teachers/${el.dataset.id}/subjects`, { subjectIds: ids });
+        toast(ids.length ? `${el.dataset.name}：已设为 ${ids.length} 个科目` : `${el.dataset.name}：不限科目`, 2600);
         render();
       } catch (e) { toast(e.message, 2600); }
     },

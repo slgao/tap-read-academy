@@ -222,27 +222,69 @@
     if (!S.gridClass || !classes.some((c) => c.id === S.gridClass)) S.gridClass = classes[0].id;
     const month = S.month || thisMonth();
     const g = await API.get(`/api/admin/attendance-grid?classId=${S.gridClass}&month=${month}`);
+    S.grid = g;
+    // 表里多留一列"今天"，方便直接补录当天
+    const dates = g.dates.slice();
+    const t = todayStr();
+    if (t.slice(0, 7) === month && !dates.includes(t)) dates.push(t);
+    // 「补录某天」点开的那一天，即使还没有记录也要给它一列
+    if (S.extraDate && S.extraDate.slice(0, 7) === month && !dates.includes(S.extraDate)) dates.push(S.extraDate);
+    dates.sort();
+    S.gridDates = dates;
     return `<div class="of-bar">
       <select id="g-class">${classes.map((c) => `<option value="${c.id}"${c.id === S.gridClass ? ' selected' : ''}>${esc(c.subject ? c.subject.name + ' · ' : '')}${esc(c.name)}</option>`).join('')}</select>
       <input type="month" id="g-month" value="${esc(month)}">
+      <button class="btn sm" data-act="addDay">+ 补录某天</button>
+      <span class="muted small">每次扣 ${g.defaultHours} 课时 · 点格子就能改</span>
       <div class="grow"></div>
       <button class="btn sm ghost" data-act="dl" data-kind="attendance">导出考勤记录</button>
     </div>
-    ${g.dates.length ? `<div class="of-table">
+    ${dates.length ? `<div class="of-table">
       <table class="of-grid"><thead><tr><th class="sticky">学员</th>
-        ${g.dates.map((d) => `<th>${d.slice(5)}</th>`).join('')}<th class="num">本月课时</th></tr></thead>
+        ${dates.map((d) => `<th class="${d === t ? 'today' : ''}">${d.slice(5)}</th>`).join('')}<th class="num">本月课时</th></tr></thead>
       <tbody>${g.students.map((st) => `<tr><td class="sticky strong">${esc(st.name)}</td>
-        ${st.marks.map((m) => `<td class="mark ${m ? m.status : ''}">${m ? ATT_NAME[m.status][0] : ''}</td>`).join('')}
+        ${dates.map((d) => {
+          const m = st.marks[g.dates.indexOf(d)] || null;
+          return `<td class="mark edit ${m ? m.status : ''}" data-act="cell" data-sid="${st.id}" data-date="${d}" title="${esc(st.name)} ${d}">${m ? ATT_NAME[m.status][0] : '＋'}</td>`;
+        }).join('')}
         <td class="num">${Math.round(st.used * 10) / 10}</td></tr>`).join('')}</tbody></table>
     </div>
-    <div class="muted small mt">到 = 到课，请 = 请假，旷 = 旷课。要改某一天的记录，在手机端点名页选那天重新点一次。</div>`
-      : '<div class="empty">这个月还没有点名记录</div>'}`;
+    <div class="muted small mt">到 = 到课，请 = 请假，旷 = 旷课。点任意格子可以补录或修改：到课扣课时，请假不扣，改动会自动退回上次扣的课时。</div>`
+      : '<div class="empty">这个月还没有点名记录，点「+ 补录某天」开始</div>'}`;
   }
   viewGrid.after = () => {
     const c = document.getElementById('g-class'), m = document.getElementById('g-month');
     if (c) c.addEventListener('change', () => go('grid', { gridClass: Number(c.value) }));
     if (m) m.addEventListener('change', () => go('grid', { month: m.value }));
   };
+
+  /** 点格子：选到课/请假/旷课，或清掉这次记录 */
+  function cellMenu(el) {
+    document.querySelectorAll('.cellmenu').forEach((x) => x.remove());
+    const box = el.getBoundingClientRect();
+    const m = document.createElement('div');
+    m.className = 'cellmenu';
+    m.style.left = Math.min(box.left, window.innerWidth - 150) + 'px';
+    m.style.top = (box.bottom + window.scrollY + 4) + 'px';
+    m.innerHTML = `${[['present', '到课'], ['leave', '请假（不扣）'], ['absent', '旷课'], ['clear', '清除记录']]
+      .map(([k, t]) => `<button data-set="${k}">${t}</button>`).join('')}`;
+    m.addEventListener('click', async (ev) => {
+      const b = ev.target.closest('[data-set]');
+      if (!b) return;
+      m.remove();
+      el.textContent = '…';
+      try {
+        await API.post(`/api/classes/${S.grid.classId}/attendance`, {
+          date: el.dataset.date, hours: S.grid.defaultHours,
+          records: [{ studentId: Number(el.dataset.sid), status: b.dataset.set }],
+        });
+        toast('已保存');
+        render();
+      } catch (e) { toast(e.message, 2600); render(); }
+    });
+    document.body.appendChild(m);
+    setTimeout(() => document.addEventListener('click', function off() { m.remove(); document.removeEventListener('click', off); }, { once: true }), 0);
+  }
 
   /* ---------------- 家长咨询 ---------------- */
   const LEAD_ST = [['new', '新咨询'], ['contacted', '已联系'], ['enrolled', '已报名'], ['invalid', '无效']];
@@ -298,6 +340,15 @@
       } catch (err) { toast(err.message, 2600); }
     },
     logout() { Store.clear(); location.reload(); },
+    cell(el, ev) { ev.stopPropagation(); cellMenu(el); },
+    async addDay() {
+      const d = (prompt('补录哪一天？（格式 2026-09-15）', todayStr()) || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return d && toast('日期格式不对');
+      if (d.slice(0, 7) !== (S.month || thisMonth())) { S.month = d.slice(0, 7); }
+      S.extraDate = d;
+      render();
+      setTimeout(() => toast('在这一列的格子上点一下，选到课或请假', 3000), 400);
+    },
     async openStu(el) {
       const side = document.getElementById('side');
       side.innerHTML = '<div class="of-hint">加载中…</div>';

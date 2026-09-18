@@ -553,6 +553,54 @@ const TAG = '__e2e_' + Date.now();
   check('老师导出的名单里手机号打码', stuCsv.includes('***') || stuCsv.split('\r\n').length <= 2, '');
   await call('DELETE', `/api/admin/teachers/${exTeacher.id}`, null, T.token);
 
+  log('\n[14] 老师科目归属、待批改统计、考勤补录');
+  const subjAllX = (await call('GET', '/api/subjects', null, T.token)).subjects;
+  const enX = subjAllX.find((x) => x.code === 'en'), calliX = subjAllX.find((x) => x.code === 'calli');
+  const subjTeacher = await call('POST', '/api/admin/teachers', { name: TAG + '孔老师' }, T.token);
+  const subjTok = (await call('POST', '/api/auth/login', { role: 'teacher', name: subjTeacher.name, teacherCode: subjTeacher.code })).token;
+  await call('PUT', `/api/admin/teachers/${subjTeacher.id}/subjects`, { subjectIds: [calliX.id] }, T.token);
+  const staffList = await call('GET', '/api/admin/teachers', null, T.token);
+  check('老师账号带上教的科目', (staffList.find((u) => u.id === subjTeacher.id).subjectIds || []).includes(calliX.id), '书法');
+  const wrongSubj = await expectFail('POST', '/api/classes', { subjectId: enX.id, gradeBand: '初中' }, subjTok);
+  check('老师开不了自己不教的科目', /你教的科目里没有/.test(wrongSubj || ''), wrongSubj);
+  const rightSubj = await call('POST', '/api/classes', { subjectId: calliX.id, gradeBand: '初中', name: TAG + ' 孔老师书法班' }, subjTok);
+  check('自己教的科目可以开班', rightSubj.subject.code === 'calli', rightSubj.name);
+  const adminAny = await call('POST', '/api/classes', { subjectId: enX.id, gradeBand: '初中', name: TAG + ' 负责人英语班' }, T.token);
+  check('负责人不受科目限制', adminAny.subject.code === 'en', adminAny.name);
+
+  // 待批改份数
+  const pendHw = await call('POST', '/api/homeworks/questions', { classId: adminAny.id, title: TAG + ' 待批统计',
+    questions: [{ type: 'photo', score: 10, stem: '拍照上传' }] }, T.token);
+  await call('POST', '/api/classes/join', { inviteCode: adminAny.inviteCode }, S.token);
+  const pendView = await call('GET', `/api/homeworks/${pendHw.id}`, null, S.token);
+  await call('POST', `/api/homeworks/${pendHw.id}/answers`, { answers: [{ questionId: pendView.questions[0].id, photos: [JPG] }] }, S.token);
+  const hwList = await call('GET', '/api/homeworks', null, T.token);
+  const pendRow = hwList.find((h) => h.id === pendHw.id);
+  check('作业列表直接给出待批改份数', pendRow.pending === 1 && pendRow.submitted === 1, `交 ${pendRow.submitted} 待批 ${pendRow.pending}`);
+  const pendSubs = await call('GET', `/api/homeworks/${pendHw.id}/submissions`, null, T.token);
+  const pendSub = pendSubs.rows.find((r) => r.submissionId);
+  await call('POST', `/api/submissions/${pendSub.submissionId}/grade`, { scores: [{ answerId: pendSub.answers[0].id, score: 8 }] }, T.token);
+  const after2 = (await call('GET', '/api/homeworks', null, T.token)).find((h) => h.id === pendHw.id);
+  check('批完之后不再计入待批改', after2.pending === 0, `待批 ${after2.pending}`);
+
+  // 电脑端考勤补录：单个学生直接改，清除会退回课时
+  const gridStu = await call('POST', '/api/admin/students', { name: TAG + '补录同学', classId: adminAny.id }, T.token);
+  await call('POST', '/api/admin/packages', { studentId: gridStu.id, totalHours: 10, giftHours: 0,
+    priceOriginal: 0, pricePaid: 0, purchasedAt: dayOf(0), expiresAt: '' }, T.token);
+  await call('POST', `/api/classes/${adminAny.id}/attendance`, { date: dayOf(-2), hours: 2,
+    records: [{ studentId: gridStu.id, status: 'present' }] }, T.token);
+  let gridHours = (await call('GET', `/api/admin/students/${gridStu.id}`, null, T.token)).hours.leftHours;
+  check('补录过去某天照样扣课时', gridHours === 8, `剩 ${gridHours}`);
+  await call('POST', `/api/classes/${adminAny.id}/attendance`, { date: dayOf(-2), hours: 2,
+    records: [{ studentId: gridStu.id, status: 'clear' }] }, T.token);
+  gridHours = (await call('GET', `/api/admin/students/${gridStu.id}`, null, T.token)).hours.leftHours;
+  const gridAfter = await call('GET', `/api/admin/attendance-grid?classId=${adminAny.id}&month=${dayOf(-2).slice(0, 7)}`, null, T.token);
+  check('清除记录：课时退回、格子也空了', gridHours === 10 && !gridAfter.dates.includes(dayOf(-2)), `剩 ${gridHours}`);
+
+  await call('DELETE', `/api/homeworks/${pendHw.id}`, null, T.token);
+  await call('DELETE', `/api/classes/${rightSubj.id}`, null, T.token);
+  await call('DELETE', `/api/admin/teachers/${subjTeacher.id}`, null, T.token);
+
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);
   check('有作业时拒绝删教材', /还有作业/.test(guarded || ''), guarded);

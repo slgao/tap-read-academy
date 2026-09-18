@@ -125,6 +125,7 @@ const users = {
   async listByRole(role) { return q('SELECT * FROM users WHERE role=? ORDER BY id').all(role).map(toUser); },
   async remove(id) {
     q('DELETE FROM sessions WHERE user_id=?').run(num(id));
+    q('DELETE FROM teacher_subjects WHERE user_id=?').run(num(id));
     q('DELETE FROM users WHERE id=?').run(num(id));
   },
   async byToken(token) {
@@ -703,6 +704,7 @@ const attendance = {
       .all(date, ...classIds.map(num)).map((r) => r.class_id));
   },
   async countSince(date) { return count('SELECT COUNT(*) n FROM attendance WHERE date >= ?', date); },
+  async remove(id) { q('DELETE FROM attendance WHERE id=?').run(num(id)); },
   async upsert(x) {
     const cur = q('SELECT * FROM attendance WHERE class_id=? AND student_id=? AND date=?')
       .get(num(x.classId), num(x.studentId), x.date);
@@ -847,6 +849,16 @@ const subjects = {
   async byCode(code) { return toSubject(q('SELECT * FROM subjects WHERE code=?').get(code)); },
   async idsForTeacher(userId) {
     return q('SELECT subject_id AS id FROM teacher_subjects WHERE user_id=?').all(num(userId)).map((r) => r.id);
+  },
+  /** 一次取多位老师教的科目：userId -> [subjectId] */
+  async byTeachers(userIds) {
+    const out = new Map();
+    if (!userIds.length) return out;
+    for (const r of q(`SELECT * FROM teacher_subjects WHERE user_id IN (${marks(userIds)})`).all(...userIds.map(num))) {
+      const arr = out.get(r.user_id) || out.set(r.user_id, []).get(r.user_id);
+      arr.push(r.subject_id);
+    }
+    return out;
   },
   async setForTeacher(userId, ids) {
     q('DELETE FROM teacher_subjects WHERE user_id=?').run(num(userId));
