@@ -27,6 +27,16 @@
     document.body.appendChild(m);
   });
 
+  // 勾了科目才展开它下面的课程；取消勾选时把已选的课程一并清掉
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (!el.dataset || !el.dataset.subject) return;
+    var box = document.querySelector('.course-chips[data-for="' + el.dataset.subject + '"]');
+    if (!box) return;
+    box.hidden = !el.checked;
+    if (!el.checked) [].forEach.call(box.querySelectorAll('input'), function (i) { i.checked = false; });
+  });
+
   var form = document.getElementById('lead-form');
   if (!form) return;
   form.addEventListener('submit', function (e) {
@@ -37,6 +47,8 @@
       source: form.getAttribute('data-source') || 'trial',
       grade: fd.get('grade') || '',
       subjects: fd.getAll('subjects'),
+      courses: fd.getAll('courses').map(Number),
+      message: String(fd.get('message') || '').trim(),
       phone: String(fd.get('phone') || '').replace(/\s|-/g, ''),
       contactTime: fd.get('contactTime') || '',
       agree: !!fd.get('agree'),

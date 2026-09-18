@@ -69,9 +69,20 @@ function page(req, { title, description, image, body, bodyClass = '' }) {
 </html>`;
 }
 
+/** 科目 + 科目下面的具体课程；勾了科目才展开它的课程 */
 async function subjectChips(selected) {
   const subs = await repo.subjects.all();
-  return subs.map((x) => `<label class="chip ${x.color}"><input type="checkbox" name="subjects" value="${esc(x.code)}"${selected.includes(x.code) ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('');
+  const cs = await repo.courses.all();
+  return subs.map((x) => {
+    const on = selected.includes(x.code);
+    const list = cs.filter((c) => c.subjectId === x.id);
+    return `<div class="subj-block">
+      <label class="chip ${x.color}"><input type="checkbox" name="subjects" value="${esc(x.code)}" data-subject="${esc(x.code)}"${on ? ' checked' : ''}><span>${esc(x.name)}</span></label>
+      ${list.length ? `<div class="course-chips" data-for="${esc(x.code)}"${on ? '' : ' hidden'}>
+        ${list.map((c) => `<label class="chip sm"><input type="checkbox" name="courses" value="${c.id}"><span>${esc(c.name)}</span></label>`).join('')}
+      </div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 async function leadForm({ token = '', source = 'share', subjectCode = '' }) {
@@ -84,14 +95,17 @@ async function leadForm({ token = '', source = 'share', subjectCode = '' }) {
     <form id="lead-form" data-token="${esc(token)}" data-source="${esc(source)}" novalidate>
       <label class="field"><span>孩子年级</span>
         <select name="grade" required><option value="">请选择</option>${grades.map((g) => `<option>${g}</option>`).join('')}</select></label>
-      <div class="field"><span>想了解的科目</span><div class="chips">${await subjectChips(subjectCode ? [subjectCode] : [])}</div></div>
+      <div class="field"><span>想了解的科目</span><div class="subj-picker">${await subjectChips(subjectCode ? [subjectCode] : [])}</div></div>
       <label class="field"><span>家长手机号</span><input name="phone" type="tel" inputmode="numeric" maxlength="13" placeholder="11 位手机号" autocomplete="tel"></label>
       <label class="field"><span>方便联系的时间</span>
         <select name="contactTime"><option>都可以</option><option>工作日白天</option><option>工作日晚上</option><option>周末</option></select></label>
+      <label class="field"><span>想告诉老师的话（可不填）</span>
+        <textarea name="message" rows="2" maxlength="300" placeholder="比如：孩子几年级、哪里想提高、方便试听的时间"></textarea></label>
       <label class="agree"><input type="checkbox" name="agree"> <span>同意${SCHOOL}的老师通过电话联系我。手机号只用于预约试听，不会给其他人。</span></label>
       <button class="btn block" type="submit">预约试听</button>
     </form>
     <div class="pub-done" hidden><b>已收到预约</b><p class="muted">老师会尽快联系您，请留意来电。</p></div>
+    <p class="pub-slogan">成为孩子期待的一堂课</p>
   </section>`;
 }
 
@@ -185,10 +199,10 @@ async function trialPage(req, res) {
   const body = `
     <section class="pub-intro">
       <h1>预约试听</h1>
-      <p class="muted">英语、语文、数学、书法，留下联系方式，老师为孩子安排一节试听课。</p>
+      <p class="muted">英语、语文、数学、书法、作业班，留下联系方式，老师为孩子安排一节试听课。</p>
     </section>
     ${await leadForm({ source: 'trial' })}`;
-  send(res, 200, page(req, { title: `预约试听 · ${SCHOOL}`, description: '英语、语文、数学、书法，预约一节试听课', body }));
+  send(res, 200, page(req, { title: `预约试听 · ${SCHOOL}`, description: '英语、语文、数学、书法、作业班，预约一节试听课', body }));
 }
 
 /** 返回 true 表示已处理 */

@@ -357,12 +357,23 @@ const TAG = '__e2e_' + Date.now();
   const noAgree = await expectFail('POST', '/api/public/leads', { phone: '13800001111', grade: '三年级', agree: false });
   check('预约：没勾同意被拒', /同意/.test(noAgree || ''), noAgree);
   const phone = '1380000' + String(Date.now()).slice(-4);
-  await call('POST', '/api/public/leads', { token: work.url.split('/').pop(), phone, grade: '三年级', subjects: ['calli', 'bogus'], contactTime: '周末', agree: true });
+  const subjAll = (await call('GET', '/api/subjects', null, T.token)).subjects;
+  const calliSub = subjAll.find((x) => x.code === 'calli');
+  check('科目下面带课程小类，作业班也在', calliSub.courses.some((c) => c.name === '小学硬笔书法')
+    && subjAll.some((x) => x.code === 'hwclass'), subjAll.map((x) => `${x.name}(${x.courses.length})`).join(' '));
+  const courseId = calliSub.courses.find((c) => c.name === '小学书法考级').id;
+  await call('POST', '/api/public/leads', { token: work.url.split('/').pop(), phone, grade: '三年级', subjects: ['calli', 'bogus'],
+    courses: [courseId, 999999], message: '孩子周六上午方便', contactTime: '周末', agree: true });
   const dupLead = await call('POST', '/api/public/leads', { token: work.url.split('/').pop(), phone, grade: '三年级', agree: true });
   const leadsList = await call('GET', '/api/admin/leads', null, T.token);
   const myLead = leadsList.filter((l) => l.phone === phone);
   check('预约记录带来源学生、只保留合法科目、重复提交不重复记', myLead.length === 1 && myLead[0].refName === '李小明'
     && JSON.stringify(myLead[0].subjects) === '["calli"]' && dupLead.duplicate === true, myLead[0] && `${myLead[0].refName} ${myLead[0].subjectNames}`);
+  check('预约记录带课程小类和家长留言', JSON.stringify(myLead[0].courseNames) === '["小学书法考级"]'
+    && myLead[0].message === '孩子周六上午方便', `${myLead[0].courseNames} / ${myLead[0].message}`);
+  const trialHtml = await (await fetch(BASE + '/trial')).text();
+  check('预约页有备注栏和标语', /name="message"/.test(trialHtml) && trialHtml.includes('成为孩子期待的一堂课')
+    && trialHtml.includes('小学精品作业班'), '');
   const stats = await call('GET', '/api/admin/promo-stats', null, T.token);
   check('宣传数据', stats.last7.shares >= 2 && stats.last7.leads >= 1, JSON.stringify(stats.last7));
 

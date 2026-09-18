@@ -818,7 +818,9 @@ on('DELETE', '/api/admin/teachers/:id', async (ctx) => {
 
 /* ================= 多科目：科目 ================= */
 on('GET', '/api/subjects', async (ctx) => {
-  const all = (await repo.subjects.all()).map(subjectView);
+  const cs = await repo.courses.all();
+  const all = (await repo.subjects.all()).map((x) => ({ ...subjectView(x),
+    courses: cs.filter((c) => c.subjectId === x.id).map((c) => ({ id: c.id, name: c.name })) }));
   const mine = ctx.user.role === 'student' ? [] : await repo.subjects.idsForTeacher(ctx.user.id);
   ok(ctx.res, { subjects: all, mine });
 });
@@ -1073,6 +1075,10 @@ on('POST', '/api/public/leads', async (ctx) => {
   if (!b.agree) return fail(ctx.res, 1001, '请勾选同意机构老师联系您');
   const codes = (await repo.subjects.all()).map((x) => x.code);
   const subjects = (Array.isArray(b.subjects) ? b.subjects : []).filter((c) => codes.includes(c));
+  const allCourses = await repo.courses.all();
+  const courses = (Array.isArray(b.courses) ? b.courses : [])
+    .map(Number).filter((id) => allCourses.some((c) => c.id === id)).slice(0, 10);
+  const message = String(b.message || '').trim().slice(0, 300);      // 家长自己写的备注
 
   const ip = String(ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '').split(',')[0].trim();
   const nowMs = Date.now();
@@ -1090,15 +1096,18 @@ on('POST', '/api/public/leads', async (ctx) => {
   await repo.leads.create({
     shareId: share ? share.id : null, refStudentId: share ? share.studentId : null,
     source: share ? 'share' : (b.source === 'gallery' ? 'gallery' : 'trial'),
-    phone, grade: b.grade, subjects, contactTime: String(b.contactTime || '').slice(0, 50), ip,
+    phone, grade: b.grade, subjects, courses, message, contactTime: String(b.contactTime || '').slice(0, 50), ip,
   });
   ok(ctx.res, { ok: true });
 }, { auth: false });
 
 on('GET', '/api/admin/leads', async (ctx) => {
   const subs = await repo.subjects.all();
+  const cs = await repo.courses.all();
   const list = await repo.leads.list();
-  ok(ctx.res, list.map((l) => ({ ...l, subjectNames: l.subjects.map((c) => (subs.find((x) => x.code === c) || {}).name).filter(Boolean) })));
+  ok(ctx.res, list.map((l) => ({ ...l,
+    subjectNames: l.subjects.map((c) => (subs.find((x) => x.code === c) || {}).name).filter(Boolean),
+    courseNames: l.courses.map((id) => (cs.find((x) => x.id === id) || {}).name).filter(Boolean) })));
 }, { roles: ['admin'] });
 
 on('PUT', '/api/admin/leads/:id', async (ctx) => {

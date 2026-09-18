@@ -392,6 +392,8 @@
           <select class="lead-st" data-lead-status="${l.id}" aria-label="跟进状态">${LEAD_ST.map(([k, t]) => `<option value="${k}"${l.status === k ? ' selected' : ''}>${t}</option>`).join('')}</select>
         </div>
         <div class="small mt">${esc(l.grade)}${l.subjectNames.length ? ' · ' + l.subjectNames.map(esc).join('、') : ''} · ${esc(l.contactTime || '都可以')}</div>
+        ${l.courseNames && l.courseNames.length ? `<div class="small">想上：${l.courseNames.map(esc).join('、')}</div>` : ''}
+        ${l.message ? `<div class="lead-msg">家长留言：${esc(l.message)}</div>` : ''}
         <div class="muted small">${src(l)} · ${fmtDate(l.createdAt)}</div>
         <div class="row mt" style="gap:8px">
           <input class="grow" data-lead-note="${l.id}" value="${esc(l.note || '')}" placeholder="跟进备注，改完自动保存">

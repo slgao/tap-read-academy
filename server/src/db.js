@@ -267,9 +267,40 @@ addColumn('submissions', 'score', 'REAL');
 addColumn('submissions', 'max_score', 'REAL');
 addColumn('submissions', 'excellent', 'INTEGER DEFAULT 0');
 
-const SUBJECTS = [['en', '英语', 'sky', 1], ['zh', '语文', 'coral', 2], ['math', '数学', 'mint', 3], ['calli', '书法', 'star', 4]];
+const SUBJECTS = [['en', '英语', 'sky', 1], ['zh', '语文', 'coral', 2], ['math', '数学', 'mint', 3],
+  ['calli', '书法', 'star', 4], ['hwclass', '作业班', 'ink', 5]];
 const insSubject = db.prepare('INSERT OR IGNORE INTO subjects (code, name, color, sort) VALUES (?,?,?,?)');
 for (const row of SUBJECTS) insSubject.run(...row);
+
+/* 科目下面的具体课程：家长预约时选到这一层，老师才知道该安排哪位老师试听 */
+db.exec(`
+CREATE TABLE IF NOT EXISTS courses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  subject_id INTEGER NOT NULL REFERENCES subjects(id),
+  name TEXT NOT NULL,
+  sort INTEGER DEFAULT 0,
+  active INTEGER DEFAULT 1,
+  UNIQUE (subject_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_course_subject ON courses(subject_id, sort);
+`);
+const COURSES = {
+  en: ['小学英语', '初中英语', '新概念英语', '启蒙英语', '自然拼读', '国际音标'],
+  math: ['小学数学', '初中精品数学', '奥数思维'],
+  zh: ['小学语文', '阅读写作', '好书共读', '走进小古文', '绘本学语文'],
+  calli: ['小学硬笔书法', '小学书法考级'],
+  hwclass: ['小学精品作业班'],
+};
+const insCourse = db.prepare('INSERT OR IGNORE INTO courses (subject_id, name, sort) VALUES (?,?,?)');
+const subjIdOf = db.prepare('SELECT id FROM subjects WHERE code=?');
+for (const [code, list] of Object.entries(COURSES)) {
+  const sid = subjIdOf.get(code);
+  if (sid) list.forEach((name, i) => insCourse.run(sid.id, name, i + 1));
+}
+
+// 家长在预约表单里写的话（和老师自己的跟进备注 note 分开存）
+addColumn('leads', 'message', 'TEXT');
+addColumn('leads', 'courses', 'TEXT');           // JSON：具体想上的课程
 // 升级前的作业都是英语课本跟读
 const en = db.prepare("SELECT id FROM subjects WHERE code='en'").get();
 db.prepare('UPDATE homeworks SET subject_id=? WHERE subject_id IS NULL').run(en.id);

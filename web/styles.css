@@ -519,3 +519,16 @@ div.field > span{display:block;font-size:13px;font-weight:700;color:var(--text-2
 .class-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
 .bigcode{font:800 44px/1.2 var(--sans);letter-spacing:.18em;color:var(--ink-deep);margin:10px 0 8px}
 .picklist{display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow:auto}
+
+/* ---------- 预约表单：科目 + 课程小类 ---------- */
+.subj-picker{display:flex;flex-direction:column;gap:10px}
+.subj-block{display:flex;flex-direction:column;gap:8px}
+.course-chips{display:flex;flex-wrap:wrap;gap:6px;padding-left:10px;border-left:2px solid var(--wash-2)}
+.chip.sm span{padding:5px 11px;font-size:13px;font-weight:600}
+.chip.sm input:checked + span{background:var(--ink);color:#fff}
+.pub-slogan{margin:16px 0 2px;text-align:center;font-family:var(--serif);font-size:17px;letter-spacing:.08em;color:var(--ink)}
+.subj.ink,.chip.ink input:checked + span{background:var(--wash);color:var(--ink)}
+.fchip.ink.on{background:var(--ink);color:#fff;box-shadow:0 2px 0 var(--ink-shade)}
+.card.cls.ink{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--ink)}
+.group-title.ink::before{background:var(--ink)}
+.lead-msg{margin-top:6px;background:var(--wash);border-radius:12px;padding:8px 10px;font-size:14px;line-height:1.55}

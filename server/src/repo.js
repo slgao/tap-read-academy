@@ -93,9 +93,11 @@ const toShare = (r) => r && ({
 });
 const toLead = (r) => r && ({
   id: r.id, shareId: r.share_id, refStudentId: r.ref_student_id, source: r.source, phone: r.phone,
-  grade: r.grade, subjects: parseJSON(r.subjects, []), contactTime: r.contact_time, status: r.status,
-  note: r.note, createdAt: r.created_at,
+  grade: r.grade, subjects: parseJSON(r.subjects, []), courses: parseJSON(r.courses, []),
+  contactTime: r.contact_time, status: r.status,
+  message: r.message || '', note: r.note, createdAt: r.created_at,
 });
+const toCourse = (r) => r && ({ id: r.id, subjectId: r.subject_id, name: r.name, sort: r.sort, active: r.active });
 const toSubItem = (r) => r && ({
   id: r.id, submissionId: r.submission_id, hotspotId: r.hotspot_id,
   assetId: r.asset_id, durationMs: r.duration_ms,
@@ -491,6 +493,19 @@ const checkins = {
 
 
 /* ---------- 科目 ---------- */
+const courses = {
+  async all() { return q('SELECT * FROM courses WHERE active=1 ORDER BY subject_id, sort, id').all().map(toCourse); },
+  async bySubject(subjectId) {
+    return q('SELECT * FROM courses WHERE subject_id=? AND active=1 ORDER BY sort, id').all(num(subjectId)).map(toCourse);
+  },
+  async byId(id) { return toCourse(q('SELECT * FROM courses WHERE id=?').get(num(id))); },
+  async create({ subjectId, name, sort }) {
+    const r = q('INSERT INTO courses (subject_id, name, sort) VALUES (?,?,?)').run(num(subjectId), name, num(sort) || 0);
+    return courses.byId(Number(r.lastInsertRowid));
+  },
+  async remove(id) { q('DELETE FROM courses WHERE id=?').run(num(id)); },
+};
+
 const subjects = {
   async all() { return q('SELECT * FROM subjects ORDER BY sort, id').all().map(toSubject); },
   async byId(id) { return toSubject(q('SELECT * FROM subjects WHERE id=?').get(num(id))); },
@@ -604,10 +619,11 @@ const shares = {
 
 const leads = {
   async create(x) {
-    const r = q(`INSERT INTO leads (share_id, ref_student_id, source, phone, grade, subjects, contact_time, status, ip, created_at)
-                 VALUES (?,?,?,?,?,?,?,'new',?,?)`)
+    const r = q(`INSERT INTO leads (share_id, ref_student_id, source, phone, grade, subjects, courses, contact_time, message, status, ip, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,'new',?,?)`)
       .run(x.shareId ? num(x.shareId) : null, x.refStudentId ? num(x.refStudentId) : null, x.source,
-        x.phone, x.grade || '', JSON.stringify(x.subjects || []), x.contactTime || '', x.ip || '', now());
+        x.phone, x.grade || '', JSON.stringify(x.subjects || []), JSON.stringify(x.courses || []),
+        x.contactTime || '', x.message || '', x.ip || '', now());
     return Number(r.lastInsertRowid);
   },
   async list(limit = 200) {
@@ -625,7 +641,7 @@ const leads = {
 };
 
 module.exports = {
-  users, sessions, classes, books, lessons, pages, hotspots, assets,
+  users, sessions, classes, books, lessons, pages, hotspots, assets, courses,
   homeworks, submissions, submissionItems, checkins,
   subjects, questions, answers, shares, leads,
 };
