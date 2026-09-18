@@ -602,6 +602,23 @@ const packages = {
     return packages.byId(id);
   },
   /** 一段时间内的收款（负责人看经营数据用） */
+  /** 课包明细：收款流水导出用 */
+  async list({ from, to, studentIds, limit = 5000 }) {
+    const where = ['1=1'], args = [];
+    if (from) { where.push('p.purchased_at >= ?'); args.push(from); }
+    if (to) { where.push('p.purchased_at <= ?'); args.push(to); }
+    if (studentIds) {
+      if (!studentIds.length) return [];
+      where.push(`p.student_id IN (${marks(studentIds)})`); args.push(...studentIds.map(num));
+    }
+    return q(`SELECT p.*, u.name AS student_name FROM packages p JOIN users u ON u.id=p.student_id
+              WHERE ${where.join(' AND ')} ORDER BY p.purchased_at DESC, p.id DESC LIMIT ${num(limit)}`)
+      .all(...args).map((r) => ({ ...toPackage(r), studentName: r.student_name }));
+  },
+  async monthlyPaid(from, to) {
+    return q(`SELECT substr(purchased_at,1,7) m, COUNT(*) n, COALESCE(SUM(price_paid),0) paid
+              FROM packages WHERE purchased_at >= ? AND purchased_at <= ? GROUP BY m ORDER BY m`).all(from, to);
+  },
   async statsBetween(from, to) {
     const r = q('SELECT COUNT(*) n, COALESCE(SUM(price_paid),0) paid FROM packages WHERE purchased_at >= ? AND purchased_at <= ?').get(from, to);
     return { count: r.n, paid: r.paid };
@@ -626,6 +643,25 @@ const hourLogs = {
     return q(`SELECT * FROM hour_logs WHERE student_id=? ORDER BY id DESC LIMIT ${num(limit)}`)
       .all(num(studentId)).map(toHourLog);
   },
+  /** 课时台账：导出和报表用 */
+  async list({ from, to, studentIds, limit = 5000 }) {
+    const where = ['1=1'], args = [];
+    if (from) { where.push('l.date >= ?'); args.push(from); }
+    if (to) { where.push('l.date <= ?'); args.push(to); }
+    if (studentIds) {
+      if (!studentIds.length) return [];
+      where.push(`l.student_id IN (${marks(studentIds)})`); args.push(...studentIds.map(num));
+    }
+    return q(`SELECT l.*, u.name AS student_name, t.name AS by_name FROM hour_logs l
+              JOIN users u ON u.id=l.student_id LEFT JOIN users t ON t.id=l.created_by
+              WHERE ${where.join(' AND ')} ORDER BY l.id DESC LIMIT ${num(limit)}`)
+      .all(...args).map((r) => ({ ...toHourLog(r), studentName: r.student_name, byName: r.by_name || '' }));
+  },
+  /** 按月统计消耗的课时 */
+  async monthlyUsed(from, to) {
+    return q(`SELECT substr(date,1,7) m, COALESCE(SUM(-hours),0) hours FROM hour_logs
+              WHERE hours < 0 AND date >= ? AND date <= ? GROUP BY m ORDER BY m`).all(from, to);
+  },
 };
 
 const attendance = {
@@ -637,6 +673,24 @@ const attendance = {
     return q(`SELECT a.*, c.name AS class_name FROM attendance a LEFT JOIN classes c ON c.id=a.class_id
               WHERE a.student_id=? ORDER BY a.date DESC, a.id DESC LIMIT ${num(limit)}`)
       .all(num(studentId)).map((r) => ({ ...toAttendance(r), className: r.class_name || '' }));
+  },
+  /** 考勤明细：导出、月度网格用 */
+  async list({ from, to, classIds, limit = 5000 }) {
+    const where = ['1=1'], args = [];
+    if (from) { where.push('a.date >= ?'); args.push(from); }
+    if (to) { where.push('a.date <= ?'); args.push(to); }
+    if (classIds) {
+      if (!classIds.length) return [];
+      where.push(`a.class_id IN (${marks(classIds)})`); args.push(...classIds.map(num));
+    }
+    return q(`SELECT a.*, u.name AS student_name, c.name AS class_name FROM attendance a
+              JOIN users u ON u.id=a.student_id LEFT JOIN classes c ON c.id=a.class_id
+              WHERE ${where.join(' AND ')} ORDER BY a.date DESC, a.id DESC LIMIT ${num(limit)}`)
+      .all(...args).map((r) => ({ ...toAttendance(r), studentName: r.student_name, className: r.class_name || '' }));
+  },
+  async monthlyCount(from, to) {
+    return q(`SELECT substr(date,1,7) m, COUNT(*) n, SUM(CASE WHEN status='present' THEN 1 ELSE 0 END) present
+              FROM attendance WHERE date >= ? AND date <= ? GROUP BY m ORDER BY m`).all(from, to);
   },
   async datesOfClass(classId, limit = 20) {
     return q(`SELECT date, COUNT(*) n FROM attendance WHERE class_id=? GROUP BY date ORDER BY date DESC LIMIT ${num(limit)}`)

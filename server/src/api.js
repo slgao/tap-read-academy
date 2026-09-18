@@ -1385,6 +1385,194 @@ on('GET', '/api/admin/dashboard', async (ctx) => {
   ok(ctx.res, out);
 }, { roles: ['teacher', 'admin'] });
 
+/* ---------- 报表与导出（电脑端教务后台用） ---------- */
+const monthStart = (m) => `${m}-01`;
+const monthEnd = (m) => {
+  const [y, mm] = m.split('-').map(Number);
+  return new Date(Date.UTC(y, mm, 0)).toISOString().slice(0, 10);
+};
+
+/** 近 n 个月的月份列表，比如 ['2026-07','2026-08','2026-09'] */
+function lastMonths(n, end) {
+  const [y, m] = end.split('-').map(Number);
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(y, m - 1 - i, 1));
+    out.push(d.toISOString().slice(0, 7));
+  }
+  return out;
+}
+
+on('GET', '/api/admin/report', async (ctx) => {
+  const end = /^\d{4}-\d{2}$/.test(ctx.query.month || '') ? ctx.query.month : today().slice(0, 7);
+  const months = lastMonths(Number(ctx.query.months) || 6, end);
+  const from = monthStart(months[0]), to = monthEnd(months[months.length - 1]);
+  const paid = await repo.packages.monthlyPaid(from, to);
+  const used = await repo.hourLogs.monthlyUsed(from, to);
+  const att = await repo.attendance.monthlyCount(from, to);
+  const rows = months.map((m) => {
+    const p = paid.find((x) => x.m === m) || { n: 0, paid: 0 };
+    const u = used.find((x) => x.m === m) || { hours: 0 };
+    const a = att.find((x) => x.m === m) || { n: 0, present: 0 };
+    return { month: m, income: YUAN(p.paid), packages: p.n, usedHours: Math.round(u.hours * 10) / 10,
+      lessons: a.n, present: a.present, attendRate: a.n ? Math.round((a.present / a.n) * 100) : null };
+  });
+  // 课时结余：所有在用课包还剩多少（等于以后要上的课，也是欠着的服务）
+  const students = await repo.users.listByRole('student');
+  const pkgs = await repo.packages.byStudents(students.map((u) => u.id));
+  let owedHours = 0, activeStudents = 0;
+  for (const u of students) {
+    const h = hoursOf(pkgs.get(u.id) || []);
+    if (h.leftHours > 0) { owedHours += h.leftHours; activeStudents++; }
+  }
+  ok(ctx.res, { months: rows, owedHours: Math.round(owedHours * 10) / 10, activeStudents,
+    totalStudents: students.length });
+}, { roles: ['admin'] });
+
+/** 某个班某个月的考勤网格：一行一个学生，一列一天 */
+on('GET', '/api/admin/attendance-grid', async (ctx) => {
+  const cls = await repo.classes.byId(ctx.query.classId);
+  if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  if (!await canTouchClass(ctx.user, cls.id)) return fail(ctx.res, 403, '这不是你带的班');
+  const month = /^\d{4}-\d{2}$/.test(ctx.query.month || '') ? ctx.query.month : today().slice(0, 7);
+  const rows = await repo.attendance.list({ from: monthStart(month), to: monthEnd(month), classIds: [cls.id] });
+  const dates = [...new Set(rows.map((r) => r.date))].sort();
+  const members = await repo.classes.members(cls.id);
+  ok(ctx.res, {
+    month, className: cls.name, dates,
+    students: members.map((m) => ({ id: m.id, name: m.name,
+      marks: dates.map((d) => { const r = rows.find((x) => x.studentId === m.id && x.date === d); return r ? { status: r.status, hours: r.hours } : null; }),
+      used: rows.filter((x) => x.studentId === m.id).reduce((a, b) => a + (b.hours || 0), 0) })),
+  });
+}, { roles: ['teacher', 'admin'] });
+
+/** 批量建档：一行一个名字，可直接进班、可统一发一个课包 */
+on('POST', '/api/admin/students/bulk', async (ctx) => {
+  const names = String(ctx.body.names || '').split(/[\n,，、]+/).map((x) => x.trim()).filter(Boolean).slice(0, 200);
+  if (!names.length) return fail(ctx.res, 1001, '请填写学员姓名，一行一个');
+  if (ctx.body.classId && !await canTouchClass(ctx.user, ctx.body.classId)) return fail(ctx.res, 403, '不能加到别人的班');
+  const pk = ctx.body.package || null;
+  const created = [], existed = [];
+  for (const name of names) {
+    let u = await repo.users.byNameRole(name, 'student');
+    if (u) existed.push(name);
+    else { u = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'student', name }); created.push(name); }
+    await repo.profiles.save(u.id, { ...(await repo.profiles.byUser(u.id) || {}), grade: ctx.body.grade || (await repo.profiles.byUser(u.id) || {}).grade || '' });
+    if (ctx.body.classId) await repo.classes.addMember(ctx.body.classId, u.id);
+    if (pk && Number(pk.totalHours) > 0) {
+      await repo.packages.create({ studentId: u.id, subjectId: pk.subjectId || null,
+        totalHours: Number(pk.totalHours) || 0, giftHours: Number(pk.giftHours) || 0,
+        priceOriginal: toFen(pk.priceOriginal), pricePaid: toFen(pk.pricePaid),
+        purchasedAt: pk.purchasedAt || today(), expiresAt: pk.expiresAt || '', note: String(pk.note || '').slice(0, 200) });
+    }
+  }
+  ok(ctx.res, { created, existed });
+}, { roles: ['admin'] });
+
+/* ---------- 导出 CSV ----------
+ * 用 UTF-8 BOM，Excel 和 WPS 双击就能正确显示中文。
+ */
+function csv(rows) {
+  const esc = (v) => {
+    const t = v == null ? '' : String(v);
+    return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  return '﻿' + rows.map((r) => r.map(esc).join(',')).join('\r\n');
+}
+function sendCsv(res, name, rows) {
+  const buf = Buffer.from(csv(rows), 'utf8');
+  res.writeHead(200, {
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Length': buf.length,
+    'Content-Disposition': `attachment; filename="${encodeURIComponent(name)}.csv"`,
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(buf);
+}
+
+const ATT_CN = { present: '到课', leave: '请假', absent: '旷课' };
+const REASON_CN = { present: '上课', absent: '旷课', leave: '请假', adjust: '手工调整', revert: '退回' };
+
+on('GET', '/api/admin/export/:kind', async (ctx) => {
+  const admin = ctx.user.role === 'admin';
+  const onlyIds = await visibleStudentIds(ctx.user);
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(ctx.query.from || '') ? ctx.query.from : '';
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(ctx.query.to || '') ? ctx.query.to : '';
+  const stamp = today();
+
+  if (ctx.params.kind === 'students') {
+    const subs = await repo.subjects.all();
+    let list = await repo.users.listByRole('student');
+    if (onlyIds) list = list.filter((u) => onlyIds.includes(u.id));
+    const ids = list.map((u) => u.id);
+    const [profiles, pkgs] = [await repo.profiles.byUsers(ids), await repo.packages.byStudents(ids)];
+    const classNames = new Map();
+    for (const cid of await repo.classes.idsForUser(ctx.user)) {
+      const c = await repo.classes.byId(cid);
+      for (const m of await repo.classes.members(cid)) {
+        const arr = classNames.get(m.id) || classNames.set(m.id, []).get(m.id);
+        if (c) arr.push(c.name);
+      }
+    }
+    const rows = [['姓名', '性别', '年级', '就读学校', '家长', '手机号', '状态', '班级', '剩余课时', '到期日', '累计星星']];
+    for (const u of list) {
+      const p = profiles.get(u.id) || {};
+      const h = hoursOf(pkgs.get(u.id) || []);
+      rows.push([u.name, p.gender || '', p.grade || '', p.school || '', p.parentName || '',
+        admin ? (p.phone || '') : '***', { active: '在读', paused: '停课', left: '已结业' }[p.status || 'active'],
+        (classNames.get(u.id) || []).join(' / '), h.leftHours, h.expiresAt || '', u.stars]);
+    }
+    return sendCsv(ctx.res, `学员名单_${stamp}`, rows);
+  }
+
+  if (ctx.params.kind === 'hours') {
+    const list = await repo.hourLogs.list({ from, to, studentIds: onlyIds });
+    const rows = [['日期', '学员', '类型', '课时变动', '说明', '操作人']];
+    for (const l of list) rows.push([l.date, l.studentName, REASON_CN[l.reason] || l.reason, l.hours, l.note, l.byName]);
+    return sendCsv(ctx.res, `课时台账_${stamp}`, rows);
+  }
+
+  if (ctx.params.kind === 'payments') {
+    if (!admin) return fail(ctx.res, 403, '只有负责人能导出收款');
+    const subs = await repo.subjects.all();
+    const list = await repo.packages.list({ from, to });
+    const rows = [['购买日期', '学员', '科目', '购买课时', '赠送课时', '共计', '已用', '剩余', '原价(元)', '实收(元)', '到期日', '状态', '备注']];
+    for (const p of list) {
+      const sum = (p.totalHours || 0) + (p.giftHours || 0);
+      rows.push([p.purchasedAt, p.studentName, (subs.find((x) => x.id === p.subjectId) || {}).name || '不限',
+        p.totalHours, p.giftHours, sum, p.usedHours, Math.round((sum - p.usedHours) * 100) / 100,
+        YUAN(p.priceOriginal), YUAN(p.pricePaid), p.expiresAt || '',
+        { active: '在用', paused: '停课中', finished: '已结束' }[p.status] || p.status, p.note]);
+    }
+    return sendCsv(ctx.res, `收款流水_${stamp}`, rows);
+  }
+
+  if (ctx.params.kind === 'attendance') {
+    const classIds = await repo.classes.idsForUser(ctx.user);
+    const list = await repo.attendance.list({ from, to, classIds });
+    const rows = [['日期', '班级', '学员', '出勤', '扣课时']];
+    for (const a of list) rows.push([a.date, a.className, a.studentName, ATT_CN[a.status] || a.status, a.hours || 0]);
+    return sendCsv(ctx.res, `考勤记录_${stamp}`, rows);
+  }
+
+  if (ctx.params.kind === 'leads') {
+    if (!admin) return fail(ctx.res, 403, '只有负责人能导出咨询');
+    const subs = await repo.subjects.all();
+    const cs = await repo.courses.all();
+    const list = await repo.leads.list(500);
+    const rows = [['时间', '手机号', '年级', '科目', '想上的课', '家长留言', '来源', '状态', '跟进备注']];
+    for (const l of list) {
+      rows.push([l.createdAt, l.phone, l.grade,
+        l.subjects.map((c) => (subs.find((x) => x.code === c) || {}).name).filter(Boolean).join(' '),
+        l.courses.map((id) => (cs.find((x) => x.id === id) || {}).name).filter(Boolean).join(' '),
+        l.message, l.source === 'share' ? `分享页${l.refName ? '（' + l.refName + '）' : ''}` : l.source === 'gallery' ? '作品展' : '预约页',
+        { new: '新咨询', contacted: '已联系', enrolled: '已报名', invalid: '无效' }[l.status] || l.status, l.note]);
+    }
+    return sendCsv(ctx.res, `家长咨询_${stamp}`, rows);
+  }
+  fail(ctx.res, 1001, '不支持的导出类型');
+}, { roles: ['teacher', 'admin'] });
+
 /* ---------- 学校简介 ---------- */
 const ABOUT_KEY = 'about';
 on('GET', '/api/about', async (ctx) => {

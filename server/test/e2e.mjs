@@ -518,6 +518,41 @@ const TAG = '__e2e_' + Date.now();
     `${tBoard.classes.length} 个班`);
   await call('DELETE', `/api/admin/teachers/${boardTeacher.id}`, null, T.token);
 
+  log('\n[13] 电脑版教务后台：批量建档、报表、考勤表、导出');
+  const bulkCls = (await call('GET', '/api/classes', null, T.token))[0];
+  const bulk = await call('POST', '/api/admin/students/bulk', { names: `${TAG}甲\n${TAG}乙`, classId: bulkCls.id,
+    grade: '三年级', package: { totalHours: 10, giftHours: 0, priceOriginal: 100, pricePaid: 100, purchasedAt: dayOf(0), expiresAt: '' } }, T.token);
+  check('批量建档：一行一个名字', bulk.created.length === 2, bulk.created.join('、'));
+  const again = await call('POST', '/api/admin/students/bulk', { names: `${TAG}甲` }, T.token);
+  check('重名的不重复建，只更新', again.created.length === 0 && again.existed.length === 1, JSON.stringify(again));
+
+  const report = await call('GET', '/api/admin/report?months=6', null, T.token);
+  check('报表：6 个月 + 课时结余', report.months.length === 6 && typeof report.owedHours === 'number'
+    && report.months[5].income >= 1, `本月收款 ¥${report.months[5].income}，结余 ${report.owedHours} 课时`);
+
+  const grid = await call('GET', `/api/admin/attendance-grid?classId=${arcCls.id}&month=${dayOf(0).slice(0, 7)}`, null, T.token);
+  check('考勤网格：按天成列、每人一行', Array.isArray(grid.dates) && grid.students.every((x) => x.marks.length === grid.dates.length),
+    `${grid.dates.length} 天 × ${grid.students.length} 人`);
+
+  const csvRes = await fetch(BASE + '/api/admin/export/students', { headers: { Authorization: 'Bearer ' + T.token } });
+  const csvBuf = Buffer.from(await csvRes.arrayBuffer());
+  const csvText = csvBuf.toString('utf8');
+  // 文件要以 BOM 开头，Excel 才不会把中文显示成乱码（fetch 的 text() 会吃掉 BOM，所以直接看字节）
+  const hasBom = csvBuf[0] === 0xEF && csvBuf[1] === 0xBB && csvBuf[2] === 0xBF;
+  check('导出学员名单：带 BOM 的 CSV', csvRes.status === 200 && hasBom
+    && csvText.includes('姓名,性别,年级') && csvText.includes(`${TAG}甲`),
+    (csvRes.headers.get('content-type') || '') + ' ' + csvText.split('\r\n').length + ' 行')
+  const payRes = await fetch(BASE + '/api/admin/export/payments', { headers: { Authorization: 'Bearer ' + T.token } });
+  check('导出收款流水', payRes.status === 200 && (await payRes.text()).includes('实收(元)'), '');
+
+  const exTeacher = await call('POST', '/api/admin/teachers', { name: TAG + '郑老师' }, T.token);
+  const exTok = (await call('POST', '/api/auth/login', { role: 'teacher', name: exTeacher.name, teacherCode: exTeacher.code })).token;
+  const payDeny = await fetch(BASE + '/api/admin/export/payments', { headers: { Authorization: 'Bearer ' + exTok } });
+  check('老师导不出收款和咨询', payDeny.status === 403, `HTTP ${payDeny.status}`);
+  const stuCsv = await (await fetch(BASE + '/api/admin/export/students', { headers: { Authorization: 'Bearer ' + exTok } })).text();
+  check('老师导出的名单里手机号打码', stuCsv.includes('***') || stuCsv.split('\r\n').length <= 2, '');
+  await call('DELETE', `/api/admin/teachers/${exTeacher.id}`, null, T.token);
+
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);
   check('有作业时拒绝删教材', /还有作业/.test(guarded || ''), guarded);
