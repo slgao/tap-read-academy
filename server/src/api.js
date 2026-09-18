@@ -145,7 +145,9 @@ async function login(ctx) {
       await repo.classes.addMember(cls.id, user.id);
     }
   } else {
-    if (loginBlocked(ip)) return fail(ctx.res, 429, '尝试太多次了，请过十分钟再试');
+    // 本机直连（没有经过反向代理）不限流：线上请求都带 X-Forwarded-For，这里只放过服务器自己和本地开发
+    const direct = !ctx.req.headers['x-forwarded-for'] && /^(127\.|::1|::ffff:127\.)/.test(ip || '');
+    if (!direct && loginBlocked(ip)) return fail(ctx.res, 429, '尝试太多次了，请过十分钟再试');
     const given = String(ctx.body.teacherCode || '').trim();
     if (!given) return fail(ctx.res, 1001, '请输入口令');
     const master = process.env.TEACHER_CODE;
@@ -153,10 +155,10 @@ async function login(ctx) {
     if (master && given === master) {
       // 主口令：负责人入口，账号不存在就建一个
       if (!user) user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'admin', name: nm });
-      else if (user.role !== 'admin') { noteLoginFail(ip); return fail(ctx.res, 2001, '这是老师账号，请用负责人给你的口令登录'); }
+      else if (user.role !== 'admin') { if (!direct) noteLoginFail(ip); return fail(ctx.res, 2001, '这是老师账号，请用负责人给你的口令登录'); }
     } else {
       if (!user || !user.loginCode || sha256(given) !== user.loginCode) {
-        noteLoginFail(ip);
+        if (!direct) noteLoginFail(ip);
         return fail(ctx.res, 2001, '姓名或口令不对');
       }
       if (!user.active) return fail(ctx.res, 2001, '这个账号已经停用，请找负责人');
@@ -844,6 +846,42 @@ on('PUT', '/api/admin/teachers/:id', async (ctx) => {
   }
   if (ctx.body.active != null) await repo.users.setActive(u.id, !!ctx.body.active);
   ok(ctx.res, { ok: true });
+}, { roles: ['admin'] });
+
+/** 某位老师名下的班（转班时用来一个班一个班地分） */
+on('GET', '/api/admin/teachers/:id/classes', async (ctx) => {
+  const u = await repo.users.byId(ctx.params.id);
+  if (!u || u.role === 'student') return fail(ctx.res, 3013, '账号不存在');
+  const subs = await repo.subjects.all();
+  const rows = await repo.classes.byTeacher(u.id);
+  const counts = await repo.classes.memberCounts(rows.map((c) => c.id));
+  ok(ctx.res, rows.map((c) => ({ id: c.id, name: c.name, gradeBand: c.gradeBand,
+    subject: subjectView(subs.find((x) => x.id === c.subjectId)), studentCount: counts.get(c.id) || 0 })));
+}, { roles: ['admin'] });
+
+/** 按班转：可以把不同的班分给不同的老师，一次提交 */
+on('POST', '/api/admin/classes/transfer', async (ctx) => {
+  const moves = (Array.isArray(ctx.body.moves) ? ctx.body.moves : []).slice(0, 50);
+  if (!moves.length) return fail(ctx.res, 1001, '请先选好每个班要转给谁');
+  const checked = [];
+  for (const m of moves) {
+    const cls = await repo.classes.byId(m.classId);
+    if (!cls) return fail(ctx.res, 3001, '班级不存在');
+    const to = await repo.users.byId(m.toId);
+    if (!to || to.role === 'student') return fail(ctx.res, 3013, '请选择要转给哪位老师');
+    if (!to.active) return fail(ctx.res, 3013, `${to.name} 的账号已停用，不能接班`);
+    // 老师只带自己教的科目：科目对不上先让负责人去加科目，免得他接了课却开不了班
+    if (to.role === 'teacher') {
+      const mine = await repo.subjects.idsForTeacher(to.id);
+      if (mine.length && cls.subjectId && !mine.includes(cls.subjectId)) {
+        const sub = await repo.subjects.byId(cls.subjectId);
+        return fail(ctx.res, 3013, `${to.name} 教的科目里没有「${sub ? sub.name : ''}」，先在账号里加上这个科目`);
+      }
+    }
+    checked.push({ cls, to });
+  }
+  for (const { cls, to } of checked) await repo.classes.setTeacher(cls.id, to.id);
+  ok(ctx.res, { moved: checked.length, detail: checked.map((x) => `${x.cls.name} → ${x.to.name}`) });
 }, { roles: ['admin'] });
 
 /** 把一位老师名下的班全部转给另一位：换人带班、离职交接时用 */

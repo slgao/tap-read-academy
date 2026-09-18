@@ -163,6 +163,7 @@ const classes = {
     return q('SELECT id FROM classes WHERE teacher_id=?').all(num(user.id)).map((r) => r.id);
   },
   async countByTeacher(teacherId) { return count('SELECT COUNT(*) n FROM classes WHERE teacher_id=?', num(teacherId)); },
+  async byTeacher(teacherId) { return q('SELECT * FROM classes WHERE teacher_id=? ORDER BY id').all(num(teacherId)).map(toClass); },
   async create({ name, inviteCode, teacherId, subjectId, gradeBand }) {
     const r = q('INSERT INTO classes (name, invite_code, teacher_id, subject_id, grade_band, created_at) VALUES (?,?,?,?,?,?)')
       .run(name, inviteCode, num(teacherId), subjectId ? num(subjectId) : null, gradeBand || '', now());

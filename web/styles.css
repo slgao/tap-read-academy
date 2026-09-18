@@ -659,3 +659,6 @@ td.num.warn{color:var(--coral-shade);font-weight:800}
 .cellmenu button{border:0;background:transparent;text-align:left;padding:9px 12px;border-radius:8px;cursor:pointer;
   font:600 14px var(--sans);color:var(--ink-deep)}
 .cellmenu button:hover{background:var(--wash)}
+.trlist{display:flex;flex-direction:column;gap:8px;max-height:42vh;overflow:auto;margin-bottom:6px}
+.trrow{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--wash);border-radius:12px}
+.trrow select{width:auto;min-width:112px;padding:8px 10px;font-size:14px;background:var(--paper)}

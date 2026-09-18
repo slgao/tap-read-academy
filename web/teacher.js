@@ -929,6 +929,35 @@
     document.getElementById('app').appendChild(m);
   }
 
+  /** 转班：一个班一个班地选接手的老师，也可以一键全转给同一个人 */
+  function transferDialog(fromName, classes, targets) {
+    const opts = (sel) => `<option value="">不转</option>` +
+      targets.map((u) => `<option value="${u.id}"${String(sel) === String(u.id) ? ' selected' : ''}>${esc(u.name)}${u.role === 'admin' ? '（负责人）' : ''}</option>`).join('');
+    const m = document.createElement('div');
+    m.className = 'poster-mask'; m.id = 'trbox';
+    m.innerHTML = `<div class="poster-sheet" role="dialog" aria-label="转出班级">
+        <div class="section-title">${esc(fromName)} 的班转给谁</div>
+        <div class="muted small">可以分别转给不同的老师；选「不转」的班留在原处。学生、作业、课时记录都跟着班一起走。</div>
+        <label class="field" style="margin:10px 0 4px"><span>快速：全部转给</span>
+          <select id="tr-all"><option value="">请选择</option>${targets.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></label>
+        <div class="trlist">${classes.map((c) => `<div class="trrow">
+          <div class="grow"><b>${subjTag(c.subject)}${esc(c.name)}</b>
+            <span class="muted small">${c.studentCount} 人${c.gradeBand ? ' · ' + esc(c.gradeBand) : ''}</span></div>
+          <select class="tr-to" data-cls="${c.id}">${opts('')}</select>
+        </div>`).join('')}</div>
+        <div class="row" style="gap:10px">
+          <button class="btn ghost grow" data-act="closeTransfer">取消</button>
+          <button class="btn grow" data-act="doTransfer">转出</button>
+        </div>
+      </div>`;
+    m.addEventListener('click', (e) => { if (e.target === m) m.remove(); });
+    m.addEventListener('change', (e) => {
+      if (e.target.id !== 'tr-all' || !e.target.value) return;
+      m.querySelectorAll('.tr-to').forEach((s) => { s.value = e.target.value; });
+    });
+    document.getElementById('app').appendChild(m);
+  }
+
   /** 选一位老师（转班时用） */
   function pickStaff(title, list, onPick) {
     const m = document.createElement('div');
@@ -1040,14 +1069,12 @@
       catch (e) { toast(e.message, 3000); }
     },
     async transferClasses(el) {
-      const list = (await API.get('/api/admin/teachers')).filter((u) => u.active && String(u.id) !== el.dataset.id);
-      if (!list.length) return toast('还没有别的在职账号可以接手');
-      pickStaff(`把 ${el.dataset.name} 的班转给谁？`, list, async (to) => {
-        try {
-          const r = await API.post(`/api/admin/teachers/${el.dataset.id}/transfer`, { toId: to.id });
-          toast(`${r.moved} 个班已转给 ${r.to}`, 2600); render();
-        } catch (e) { toast(e.message, 2600); }
-      });
+      const id = el.dataset.id;
+      const [staff, classes] = await Promise.all([API.get('/api/admin/teachers'), API.get(`/api/admin/teachers/${id}/classes`)]);
+      const targets = staff.filter((u) => u.active && String(u.id) !== id);
+      if (!targets.length) return toast('还没有别的在职账号可以接手');
+      if (!classes.length) return toast('这位老师名下没有班');
+      transferDialog(el.dataset.name, classes, targets);
     },
     async toggleStaff(el) {
       const on = el.dataset.on === '1';
@@ -1067,6 +1094,19 @@
     },
     closeCode() { const m = document.getElementById('codebox'); if (m) m.remove(); },
     closePick() { const m = document.getElementById('pickbox'); if (m) m.remove(); },
+    closeTransfer() { const m = document.getElementById('trbox'); if (m) m.remove(); },
+    async doTransfer(el) {
+      const moves = [...document.querySelectorAll('.tr-to')].filter((s) => s.value)
+        .map((s) => ({ classId: Number(s.dataset.cls), toId: Number(s.value) }));
+      if (!moves.length) return toast('还没选要转给谁');
+      el.disabled = true;
+      try {
+        const r = await API.post('/api/admin/classes/transfer', { moves });
+        ACT.closeTransfer();
+        toast(`${r.moved} 个班已转出：${r.detail.join('；')}`, 3600);
+        render();
+      } catch (e) { toast(e.message, 3200); el.disabled = false; }
+    },
     async saveClass(el) {
       const sub = document.querySelector('input[name="c-subj"]:checked');
       const band = document.querySelector('input[name="c-band"]:checked');

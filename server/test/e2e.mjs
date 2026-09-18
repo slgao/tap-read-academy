@@ -43,7 +43,8 @@ const TAG = '__e2e_' + Date.now();
   const noAuth = await expectFail('GET', '/api/me');
   check('未登录被拒', /未登录/.test(noAuth || ''), noAuth);
 
-  const cls = (await call('GET', '/api/classes', null, T.token))[0];
+  const allCls = await call('GET', '/api/classes', null, T.token);
+  const cls = allCls.find((c) => c.inviteCode === 'DEMO88') || allCls[0];   // 固定用演示班，别被测试留下的班顶掉
   check('班级学生数', cls.studentCount >= 1, cls.studentCount + ' 人');
 
   log('\n[2] 内容后台：建教材 → 建课 → 传音频 → 传页面 → 存热区');
@@ -144,8 +145,8 @@ const TAG = '__e2e_' + Date.now();
 
   log('\n[5] 打卡');
   let hb = await call('POST', '/api/study/heartbeat', { seconds: 30 }, S.token);
-  // 今天还没打过卡时才能验这一条（同一天重复跑测试时，学生早就打过卡了）
-  if (hb.todaySeconds < hb.needSeconds) {
+  // 只有"今天从没打过卡"时这条才成立（同一天重复跑测试，学生早就打过了）
+  if (hb.todaySeconds < hb.needSeconds && !S.user.lastCheckin) {
     check('没到时长不算打卡', hb.checkedInToday === false, `今日 ${hb.todaySeconds}s / 需 ${hb.needSeconds}s`);
   }
   // 单次心跳最多记 120 秒，按需要的时长补几次
@@ -210,6 +211,28 @@ const TAG = '__e2e_' + Date.now();
   // 同名提示要说清楚怎么办
   const dupName = await expectFail('POST', '/api/admin/teachers', { name: staff.name }, T.token);
   check('同名账号给出可操作的提示', /停用|重置口令/.test(dupName || ''), dupName);
+
+  // 按班转：不同的班可以分给不同的老师
+  const splitA = await call('POST', '/api/admin/teachers', { name: TAG + '甲老师' }, T.token);
+  const splitB = await call('POST', '/api/admin/teachers', { name: TAG + '乙老师' }, T.token);
+  const enSubj = (await call('GET', '/api/subjects', null, T.token)).subjects.find((x) => x.code === 'en');
+  const splitFrom = await call('POST', '/api/admin/teachers', { name: TAG + '丙老师' }, T.token);
+  const c1 = await call('POST', '/api/classes', { subjectId: enSubj.id, gradeBand: '一二年级', name: TAG + ' 分转一班', teacherId: splitFrom.id }, T.token);
+  const c2 = await call('POST', '/api/classes', { subjectId: enSubj.id, gradeBand: '三四年级', name: TAG + ' 分转二班', teacherId: splitFrom.id }, T.token);
+  const ownList = await call('GET', `/api/admin/teachers/${splitFrom.id}/classes`, null, T.token);
+  check('能列出某位老师名下的班', ownList.length >= 2 && ownList.every((c) => 'studentCount' in c), `${ownList.length} 个班`);
+  const split = await call('POST', '/api/admin/classes/transfer', { moves: [
+    { classId: c1.id, toId: splitA.id }, { classId: c2.id, toId: splitB.id }] }, T.token);
+  check('两个班分别转给两位老师', split.moved === 2, split.detail.join('；'));
+  const afterSplit = await call('GET', '/api/classes', null, T.token);
+  check('转出后各归各家', afterSplit.find((c) => c.id === c1.id).teacherName === splitA.name
+    && afterSplit.find((c) => c.id === c2.id).teacherName === splitB.name, '');
+  const calliSubj = (await call('GET', '/api/subjects', null, T.token)).subjects.find((x) => x.code === 'calli');
+  await call('PUT', `/api/admin/teachers/${splitA.id}/subjects`, { subjectIds: [calliSubj.id] }, T.token);
+  const wrongMove = await expectFail('POST', '/api/admin/classes/transfer', { moves: [{ classId: c2.id, toId: splitA.id }] }, T.token);
+  check('接手老师没教这个科目时拦住', /教的科目里没有/.test(wrongMove || ''), wrongMove);
+  for (const c of [c1, c2]) await call('DELETE', `/api/classes/${c.id}`, null, T.token);
+  for (const u of [splitA, splitB, splitFrom]) await call('DELETE', `/api/admin/teachers/${u.id}`, null, T.token);
 
   // 换人带班：班连同学生、作业一起转走
   const helper2 = await call('POST', '/api/admin/teachers', { name: TAG + '孙老师' }, T.token);
