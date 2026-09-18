@@ -506,6 +506,18 @@ const TAG = '__e2e_' + Date.now();
   // 清理
   await call('DELETE', `/api/admin/teachers/${tOnly.id}`, null, T.token).catch(() => {});
 
+  log('\n[12] 教务台');
+  const board = await call('GET', '/api/admin/dashboard', null, T.token);
+  check('教务台：今天的班、待办数、本月收款', Array.isArray(board.classes) && board.classes.every((c) => 'marked' in c)
+    && typeof board.toReview === 'number' && board.month && typeof board.month.income === 'number',
+    `${board.classes.length} 个班，待批改 ${board.toReview}，本月收款 ¥${board.month.income}`);
+  const boardTeacher = await call('POST', '/api/admin/teachers', { name: TAG + '吴老师' }, T.token);
+  const boardTok = (await call('POST', '/api/auth/login', { role: 'teacher', name: boardTeacher.name, teacherCode: boardTeacher.code })).token;
+  const tBoard = await call('GET', '/api/admin/dashboard', null, boardTok);
+  check('老师的教务台不含经营数据和咨询', tBoard.month === undefined && tBoard.newLeads === undefined && tBoard.classes.length === 0,
+    `${tBoard.classes.length} 个班`);
+  await call('DELETE', `/api/admin/teachers/${boardTeacher.id}`, null, T.token);
+
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);
   check('有作业时拒绝删教材', /还有作业/.test(guarded || ''), guarded);

@@ -8,7 +8,7 @@
   const player = new Player();
   const isAdmin = () => ((Store.user || {}).role === 'admin');
 
-  const S = { view: 'classes', pick: { bookId: null, pageId: null, sel: [] }, newKind: 'questions', qs: [] };
+  const S = { view: 'home', pick: { bookId: null, pageId: null, sel: [] }, newKind: 'questions', qs: [] };
 
   const TAB_IC = {
     users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14a6.5 6.5 0 0 1 3.5 6"/>',
@@ -16,6 +16,7 @@
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
     phone: '<path d="M6.5 3.5h3l1.5 4.5-2 1.5a11 11 0 0 0 5.5 5.5l1.5-2 4.5 1.5v3a2 2 0 0 1-2 2A16 16 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>',
     folder: '<path d="M3 7.5a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    board: '<rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M8 9h8M8 13h8M8 17h4"/>',
   };
 
   function go(v, d) { Clip.stop(); player.stop(); S.view = v; Object.assign(S, d || {}); render(); }
@@ -26,9 +27,9 @@
     $view.className = V.noTab ? 'view no-tab' : 'view';
     $view.innerHTML = '<div class="empty">加载中…</div>';
     $tab.hidden = !V.tab;
-    const tabs = [['classes', '班级', TAB_IC.users], ['students', '学员', TAB_IC.folder], ['hwlist', '作业', TAB_IC.pencil]];
-    if (isAdmin()) tabs.push(['leads', '咨询', TAB_IC.phone]);      // 家长手机号只给负责人看
-    tabs.push(['me', '我的', TAB_IC.user]);
+    // 五个标签够用：咨询、请假、奖品这些入口都在教务台和「我的」里
+    const tabs = [['home', '教务台', TAB_IC.board], ['classes', '班级', TAB_IC.users],
+      ['students', '学员', TAB_IC.folder], ['hwlist', '作业', TAB_IC.pencil], ['me', '我的', TAB_IC.user]];
     if (V.tab) $tab.innerHTML = tabs
       .map(([k, t, icon]) => `<button class="${S.view === k ? 'on' : ''}" data-go="${k}" aria-label="${t}"><span class="tab-ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></span>${t}</button>`).join('');
     return Promise.resolve(V.body()).then((h) => { $view.innerHTML = h; if (V.after) V.after(); })
@@ -95,6 +96,66 @@
         <button class="btn block" data-act="login">进入老师端</button>
         <div class="muted small mt center">口令找负责人要；负责人用自己的主口令登录</div>
       </div>`,
+  };
+
+  /* ---------- 教务台：今天要办的事都摆在这一屏 ---------- */
+  const greet = () => {
+    const h = new Date().getHours();
+    return h < 6 ? '夜深了' : h < 11 ? '早上好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
+  };
+
+  const HOME = {
+    top: () => `<h1><img src="brand/logo-96.png" alt="">教务台</h1>`, tab: true,
+    body: async () => {
+      const d = await API.get('/api/admin/dashboard');
+      const admin = d.role === 'admin';
+      const todo = [];
+      if (d.toReview) todo.push(['hwlist', '作业待批改', d.toReview, '去批改', 'coral']);
+      if (d.pendingLeaves) todo.push(['leaves', '请假待审批', d.pendingLeaves, '去审批', 'star']);
+      if (d.pendingRewards) todo.push(['rewards', '奖品待发放', d.pendingRewards, '去发放', 'mint']);
+      if (admin && d.newLeads) todo.push(['leads', '新咨询', d.newLeads, '去联系家长', 'sky']);
+      const unmarked = d.classes.filter((c) => !c.marked && c.studentCount);
+
+      return `<div class="hello">
+        <h2>${esc(d.name)}，${greet()}！</h2>
+        <div class="level">${esc(d.date)} · ${admin ? '负责人' : '老师'}</div>
+      </div>
+
+      <div class="card">
+        <div class="row between mb"><div class="section-title">今天的点名</div>
+          <span class="muted small">${d.classes.length - unmarked.length}/${d.classes.length} 个班已点</span></div>
+        ${d.classes.length ? `<div class="rollgrid">${d.classes.map((c) => `
+          <button class="rollchip ${c.marked ? 'done' : ''}" data-go="roll" data-arg='${JSON.stringify({ clsId: c.id, rollDate: null })}'>
+            <b>${esc(c.name)}</b><span>${c.marked ? '已点名' : `${c.studentCount} 人待点名`}</span></button>`).join('')}</div>`
+          : '<div class="muted small">还没有班级，先去「班级」里建一个</div>'}
+      </div>
+
+      ${todo.length ? `<div class="tiles">${todo.map(([view, label, n, hint, color]) => `
+        <button class="tile ${color}" data-go="${view}"><span class="t-num">${n}</span>
+          <div><b>${label}</b><span>${hint} ›</span></div></button>`).join('')}</div>`
+        : '<div class="card tight mb"><div class="strong">今天没有待办</div><div class="muted small mt">作业都批完了，请假、奖品、咨询也都处理过了。</div></div>'}
+
+      ${(d.lowHours.length || d.expiring.length) ? `<div class="card">
+        <div class="section-title mb">课时提醒</div>
+        ${d.lowHours.length ? `<div class="muted small mb">课时快用完</div>
+          ${d.lowHours.map((x) => `<div class="row between alertline" data-go="student" data-arg='${JSON.stringify({ stuId: x.id })}'>
+            <span>${esc(x.name)}</span><span class="pill todo">剩 ${x.leftHours} 课时</span></div>`).join('')}` : ''}
+        ${d.expiring.length ? `<div class="muted small mb mt">30 天内到期</div>
+          ${d.expiring.map((x) => `<div class="row between alertline" data-go="student" data-arg='${JSON.stringify({ stuId: x.id })}'>
+            <span>${esc(x.name)}</span><span class="pill warn">${esc(x.expiresAt)} · 剩 ${x.leftHours}</span></div>`).join('')}` : ''}
+        <div class="muted small mt">点名字可以直接打开档案，联系家长续费。</div>
+      </div>` : ''}
+
+      ${admin && d.month ? `<div class="card">
+        <div class="section-title mb">本月（${esc(d.date.slice(0, 7))}）</div>
+        <div class="minis">
+          <div><b>¥${d.month.income}</b><span>收款</span></div>
+          <div><b>${d.month.newStudents}</b><span>新学员</span></div>
+          <div><b>${d.month.lessons}</b><span>上课人次</span></div>
+        </div>
+        <div class="muted small mt">收款按课包的购买日期统计，只有负责人看得到。</div>
+      </div>` : ''}`;
+    },
   };
 
   /* ---------- 班级：按科目开班，同一科目按年级段分班 ---------- */
@@ -615,7 +676,7 @@
   /* ---------- 咨询：家长预约试听 ---------- */
   const LEAD_ST = [['new', '新咨询'], ['contacted', '已联系'], ['enrolled', '已报名'], ['invalid', '无效']];
   const LEADS = {
-    top: () => `<h1><img src="brand/logo-96.png" alt="">咨询</h1>`, tab: true,
+    top: () => `<button class="back" data-go="me">‹</button><h1>家长咨询</h1>`, noTab: true,
     body: async () => {
       const [ps, leads] = await Promise.all([API.get('/api/admin/promo-stats'), API.get('/api/admin/leads')]);
       const src = (l) => (l.source === 'share' ? (l.refName ? `看了 ${esc(l.refName)} 的分享` : '来自分享页')
@@ -667,6 +728,9 @@
         <a class="btn sm ghost" href="admin.html" target="_blank">打开内容后台</a></div></div>`
         : `<div class="card"><div class="section-title mb">我带的班</div>
         <div class="muted small">${st.classes} 个班。要加新班或改科目，在「班级」页操作；教材内容和家长咨询由负责人管理。</div></div>`}
+      ${admin ? `<div class="card"><div class="row between mb"><div class="section-title">家长咨询</div>
+          <button class="btn sm" data-go="leads">查看</button></div>
+        <div class="muted small">分享页和预约页收到的家长预约，只有负责人能看到手机号。</div></div>` : ''}
       <div class="card"><div class="row between mb"><div class="section-title">请假审批</div>
           <button class="btn sm" data-go="leaves">查看</button></div>
         <div class="muted small">家长在学生端提交请假，准假后点名时这一天不扣课时。</div></div>
@@ -877,7 +941,7 @@
     document.getElementById('app').appendChild(m);
   }
 
-  const VIEWS = { login: LOGIN, classes: CLASSES, classform: CLASSFORM, staff: STAFF, rewards: REWARDS,
+  const VIEWS = { login: LOGIN, home: HOME, classes: CLASSES, classform: CLASSFORM, staff: STAFF, rewards: REWARDS,
     students: STUDENTS, student: STUDENT, roll: ROLL, leaves: LEAVES, about: ABOUT, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
 
   /** 把页面上的评分栏读成一个对象；没打分就返回 null（后端会原样清空） */
@@ -900,7 +964,7 @@
     async login() {
       const name = document.getElementById('i-name').value.trim();
       if (!name) return toast('请填写姓名');
-      try { const d = await API.post('/api/auth/dev-login', { role: 'teacher', name, teacherCode: document.getElementById('i-tcode').value }); Store.token = d.token; Store.user = d.user; go('classes'); }
+      try { const d = await API.post('/api/auth/login', { role: 'teacher', name, teacherCode: document.getElementById('i-tcode').value }); Store.token = d.token; Store.user = d.user; go('home'); }
       catch (e) { toast(e.message); }
     },
     logout() { Store.clear(); go('login'); },
@@ -1302,6 +1366,6 @@
 
   (async function boot() {
     if (!Store.token) return go('login');
-    try { await API.get('/api/me'); go('classes'); } catch { go('login'); }
+    try { await API.get('/api/me'); go('home'); } catch { go('login'); }
   })();
 })();

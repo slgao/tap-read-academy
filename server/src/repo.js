@@ -121,6 +121,7 @@ const users = {
   async setActive(id, on) { q('UPDATE users SET active=? WHERE id=?').run(on ? 1 : 0, num(id)); },
   async setRole(id, role) { q('UPDATE users SET role=? WHERE id=?').run(role, num(id)); },
   async rename(id, name) { q('UPDATE users SET name=? WHERE id=?').run(name, num(id)); },
+  async countStudentsSince(date) { return count("SELECT COUNT(*) n FROM users WHERE role='student' AND created_at >= ?", date); },
   async listByRole(role) { return q('SELECT * FROM users WHERE role=? ORDER BY id').all(role).map(toUser); },
   async remove(id) {
     q('DELETE FROM sessions WHERE user_id=?').run(num(id));
@@ -414,6 +415,12 @@ const submissions = {
     return toSubmission(q('SELECT * FROM submissions WHERE homework_id=? AND student_id=?').get(num(homeworkId), num(studentId)));
   },
   async countByHomework(homeworkId) { return count('SELECT COUNT(*) n FROM submissions WHERE homework_id=?', num(homeworkId)); },
+  /** 这些班里还等着老师批改的作业份数 */
+  async countToReview(classIds) {
+    if (!classIds.length) return 0;
+    return count(`SELECT COUNT(*) n FROM submissions s JOIN homeworks h ON h.id=s.homework_id
+                  WHERE s.status='submitted' AND h.class_id IN (${marks(classIds)})`, ...classIds.map(num));
+  },
   /** 一个学生在多份作业里的提交：homeworkId -> 提交 */
   async byStudentForHomeworks(studentId, homeworkIds) {
     if (!homeworkIds.length) return new Map();
@@ -594,6 +601,11 @@ const packages = {
         x.subjectId === undefined ? cur.subject_id : (x.subjectId ? num(x.subjectId) : null), num(id));
     return packages.byId(id);
   },
+  /** 一段时间内的收款（负责人看经营数据用） */
+  async statsBetween(from, to) {
+    const r = q('SELECT COUNT(*) n, COALESCE(SUM(price_paid),0) paid FROM packages WHERE purchased_at >= ? AND purchased_at <= ?').get(from, to);
+    return { count: r.n, paid: r.paid };
+  },
   async addUsed(id, hours) { q('UPDATE packages SET used_hours = used_hours + ? WHERE id=?').run(Number(hours), num(id)); },
   async remove(id) {
     q('DELETE FROM hour_logs WHERE package_id=?').run(num(id));
@@ -630,6 +642,13 @@ const attendance = {
     return q(`SELECT date, COUNT(*) n FROM attendance WHERE class_id=? GROUP BY date ORDER BY date DESC LIMIT ${num(limit)}`)
       .all(num(classId));
   },
+  /** 这些班里，哪些今天已经点过名 */
+  async markedClassIds(date, classIds) {
+    if (!classIds.length) return new Set();
+    return new Set(q(`SELECT DISTINCT class_id FROM attendance WHERE date=? AND class_id IN (${marks(classIds)})`)
+      .all(date, ...classIds.map(num)).map((r) => r.class_id));
+  },
+  async countSince(date) { return count('SELECT COUNT(*) n FROM attendance WHERE date >= ?', date); },
   async upsert(x) {
     const cur = q('SELECT * FROM attendance WHERE class_id=? AND student_id=? AND date=?')
       .get(num(x.classId), num(x.studentId), x.date);

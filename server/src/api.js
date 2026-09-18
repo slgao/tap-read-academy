@@ -1336,6 +1336,55 @@ on('GET', '/api/me/archive', async (ctx) => {
   });
 }, { roles: ['student'] });
 
+/* ---------- 教务台：今天要办的事 ---------- */
+on('GET', '/api/admin/dashboard', async (ctx) => {
+  const admin = ctx.user.role === 'admin';
+  const date = today();
+  const classIds = await repo.classes.idsForUser(ctx.user);
+  const marked = await repo.attendance.markedClassIds(date, classIds);
+  const subs = await repo.subjects.all();
+  const counts = await repo.classes.memberCounts(classIds);
+
+  const classes = [];
+  for (const id of classIds) {
+    const c = await repo.classes.byId(id);
+    if (!c) continue;
+    classes.push({ id: c.id, name: c.name, subject: subjectView(subs.find((x) => x.id === c.subjectId)),
+      studentCount: counts.get(c.id) || 0, marked: marked.has(c.id) });
+  }
+
+  // 课时预警：剩 4 课时以内，或 30 天内到期
+  const onlyIds = await visibleStudentIds(ctx.user);
+  const students = (await repo.users.listByRole('student')).filter((u) => !onlyIds || onlyIds.includes(u.id));
+  const pkgs = await repo.packages.byStudents(students.map((u) => u.id));
+  const soon = new Date(Date.parse(date) + 30 * 86400000).toISOString().slice(0, 10);
+  const lowHours = [], expiring = [];
+  for (const u of students) {
+    const list = pkgs.get(u.id) || [];
+    if (!list.length) continue;
+    const h = hoursOf(list);
+    if (h.leftHours > 0 && h.leftHours <= 4) lowHours.push({ id: u.id, name: u.name, leftHours: h.leftHours });
+    if (h.expiresAt && h.expiresAt <= soon && h.leftHours > 0) expiring.push({ id: u.id, name: u.name, expiresAt: h.expiresAt, leftHours: h.leftHours });
+  }
+  expiring.sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
+
+  const out = {
+    date, name: ctx.user.name, role: ctx.user.role,
+    classes, toReview: await repo.submissions.countToReview(classIds),
+    pendingLeaves: await repo.leaves.countPending(onlyIds),
+    lowHours: lowHours.slice(0, 8), expiring: expiring.slice(0, 8),
+    pendingRewards: await repo.redemptions.countPending(),
+  };
+  if (admin) {
+    const monthStart = date.slice(0, 8) + '01';
+    const m = await repo.packages.statsBetween(monthStart, date);
+    out.newLeads = await repo.leads.countNew();
+    out.month = { income: YUAN(m.paid), packages: m.count,
+      newStudents: await repo.users.countStudentsSince(monthStart), lessons: await repo.attendance.countSince(monthStart) };
+  }
+  ok(ctx.res, out);
+}, { roles: ['teacher', 'admin'] });
+
 /* ---------- 学校简介 ---------- */
 const ABOUT_KEY = 'about';
 on('GET', '/api/about', async (ctx) => {
