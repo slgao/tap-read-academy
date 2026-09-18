@@ -135,10 +135,16 @@
       if (S.clsId && !c) return `<div class="empty">班级不存在</div>`;
       const ss = c ? await API.get(`/api/classes/${c.id}/students`) : [];
       const subId = c && c.subject ? c.subject.id : null;
+      // 负责人可以指定这个班归谁带；老师自己建的班就是自己的
+      const staff = isAdmin() ? (await API.get('/api/admin/teachers')).filter((u) => u.active) : [];
+      const curT = c ? c.teacherId : (Store.user || {}).id;
+      const teacherField = staff.length ? `<label class="field"><span>任课老师</span><select id="c-teacher">${
+        staff.map((u) => `<option value="${u.id}"${u.id === curT ? ' selected' : ''}>${esc(u.name)}${u.role === 'admin' ? '（负责人）' : ''}</option>`).join('')}</select></label>` : '';
       return `<div class="card">
         <div class="field"><span>科目</span><div class="chips">${subj.subjects.map((x) => `<label class="chip ${esc(x.color)}"><input type="radio" name="c-subj" value="${x.id}"${x.id === subId ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('')}</div></div>
         <div class="field"><span>年级段</span><div class="chips">${bands.map((b) => `<label class="chip"><input type="radio" name="c-band" value="${esc(b)}"${c && c.gradeBand === b ? ' checked' : ''}><span>${esc(b)}</span></label>`).join('')}</div></div>
         <label class="field"><span>班级名称（可不填，自动叫「三四年级书法班」这样）</span><input id="c-name" value="${c ? esc(c.name) : ''}" placeholder="也可以写上课时间，比如：书法 周六上午班"></label>
+        ${teacherField}
         <button class="btn block" data-act="saveClass">${c ? '保存' : '创建班级'}</button>
       </div>
       ${c ? `<div class="card"><div class="row between"><div class="section-title">学生 ${ss.length} 人</div><span class="pill blue">邀请码 ${esc(c.inviteCode)}</span></div>
@@ -437,12 +443,35 @@
           <div class="row mt" style="gap:8px;flex-wrap:wrap">
             <button class="btn sm ghost" data-act="resetCode" data-id="${u.id}" data-name="${esc(u.name)}">重置口令</button>
             <button class="btn sm grey" data-act="renameStaff" data-id="${u.id}" data-name="${esc(u.name)}">改名</button>
+            <button class="btn sm grey" data-act="toggleRole" data-id="${u.id}" data-name="${esc(u.name)}" data-role="${u.role}">${u.role === 'admin' ? '改为老师' : '设为负责人'}</button>
             <button class="btn sm grey" data-act="toggleStaff" data-id="${u.id}" data-on="${u.active ? 1 : 0}">${u.active ? '停用' : '恢复'}</button>
-            ${u.classCount ? '' : `<button class="btn sm danger" data-act="delStaff" data-id="${u.id}" data-name="${esc(u.name)}">删除</button>`}
+            ${u.classCount
+              ? `<button class="btn sm ghost" data-act="transferClasses" data-id="${u.id}" data-name="${esc(u.name)}">转出班级</button>`
+              : `<button class="btn sm danger" data-act="delStaff" data-id="${u.id}" data-name="${esc(u.name)}">删除</button>`}
           </div>`}
         </div>`).join('')}`;
     },
   };
+
+  /** 选一位老师（转班时用） */
+  function pickStaff(title, list, onPick) {
+    const m = document.createElement('div');
+    m.className = 'poster-mask'; m.id = 'pickbox';
+    m.innerHTML = `<div class="poster-sheet" role="dialog" aria-label="${esc(title)}">
+        <div class="section-title">${esc(title)}</div>
+        <div class="muted small">班里的学生、作业和批改记录都会跟着一起转过去。</div>
+        <div class="picklist">${list.map((u) => `<button class="btn ghost block" data-pick="${u.id}">${esc(u.name)}${u.role === 'admin' ? '（负责人）' : ''} · ${u.classCount} 个班</button>`).join('')}</div>
+        <button class="btn grey block" data-act="closePick">取消</button>
+      </div>`;
+    m.addEventListener('click', (e) => {
+      if (e.target === m) return m.remove();
+      const b = e.target.closest('[data-pick]');
+      if (!b) return;
+      m.remove();
+      onPick(list.find((u) => String(u.id) === b.dataset.pick));
+    });
+    document.getElementById('app').appendChild(m);
+  }
 
   /** 新口令只显示这一次，让负责人抄下来发给老师 */
   function showCode(name, code) {
@@ -495,6 +524,25 @@
         render();
       } catch (e) { toast(e.message, 2600); }
     },
+    async toggleRole(el) {
+      const toAdmin = el.dataset.role !== 'admin';
+      const msg = toAdmin
+        ? `把 ${el.dataset.name} 设为负责人？他将能看到全校的班、家长预约和教材内容。`
+        : `把 ${el.dataset.name} 改成普通老师？他之后只能看到自己带的班。`;
+      if (!confirm(msg)) return;
+      try { await API.put('/api/admin/teachers/' + el.dataset.id, { role: toAdmin ? 'admin' : 'teacher' }); toast('已修改'); render(); }
+      catch (e) { toast(e.message, 3000); }
+    },
+    async transferClasses(el) {
+      const list = (await API.get('/api/admin/teachers')).filter((u) => u.active && String(u.id) !== el.dataset.id);
+      if (!list.length) return toast('还没有别的在职账号可以接手');
+      pickStaff(`把 ${el.dataset.name} 的班转给谁？`, list, async (to) => {
+        try {
+          const r = await API.post(`/api/admin/teachers/${el.dataset.id}/transfer`, { toId: to.id });
+          toast(`${r.moved} 个班已转给 ${r.to}`, 2600); render();
+        } catch (e) { toast(e.message, 2600); }
+      });
+    },
     async toggleStaff(el) {
       const on = el.dataset.on === '1';
       if (on && !confirm('停用后这位老师就登录不了了，确定？')) return;
@@ -512,12 +560,15 @@
       else toast('请手抄：' + code, 3000);
     },
     closeCode() { const m = document.getElementById('codebox'); if (m) m.remove(); },
+    closePick() { const m = document.getElementById('pickbox'); if (m) m.remove(); },
     async saveClass(el) {
       const sub = document.querySelector('input[name="c-subj"]:checked');
       const band = document.querySelector('input[name="c-band"]:checked');
       if (!sub) return toast('请选科目');
       if (!band) return toast('请选年级段');
+      const tSel = document.getElementById('c-teacher');
       const body = { subjectId: Number(sub.value), gradeBand: band.value, name: document.getElementById('c-name').value.trim() };
+      if (tSel) body.teacherId = Number(tSel.value);
       el.disabled = true;
       try {
         const c = S.clsId ? await API.put('/api/classes/' + S.clsId, body) : await API.post('/api/classes', body);

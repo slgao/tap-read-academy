@@ -215,7 +215,14 @@ on('POST', '/api/classes', async (ctx) => {
   let code; let guard = 0;
   do { code = inviteCode(); guard++; } while (await repo.classes.inviteCodeTaken(code) && guard < 20);
 
-  const cls = await repo.classes.create({ name: f.name, inviteCode: code, teacherId: ctx.user.id, subjectId: f.subject.id, gradeBand: f.gradeBand });
+  // 负责人可以直接把新班开在某位老师名下
+  let teacherId = ctx.user.id;
+  if (ctx.user.role === 'admin' && ctx.body.teacherId) {
+    const t = await repo.users.byId(ctx.body.teacherId);
+    if (!t || t.role === 'student' || !t.active) return fail(ctx.res, 3013, '请选择一位在职的老师');
+    teacherId = t.id;
+  }
+  const cls = await repo.classes.create({ name: f.name, inviteCode: code, teacherId, subjectId: f.subject.id, gradeBand: f.gradeBand });
   // 新班级默认可见全部教材（MVP 简化）
   for (const b of await repo.books.all()) await repo.books.grantToClass(b.id, cls.id);
   ok(ctx.res, await classView(cls));
@@ -230,7 +237,16 @@ on('PUT', '/api/classes/:id', async (ctx) => {
   if (f.subject.id !== cls.subjectId && await repo.homeworks.countByClass(cls.id)) {
     return fail(ctx.res, 3009, '这个班已经布置过作业，不能再改科目');
   }
-  ok(ctx.res, await classView(await repo.classes.update(cls.id, { name: f.name, subjectId: f.subject.id, gradeBand: f.gradeBand })));
+  // 换任课老师只有负责人能做；作业、学生、批改记录都跟着班走
+  if (ctx.body.teacherId != null && Number(ctx.body.teacherId) !== cls.teacherId) {
+    if (ctx.user.role !== 'admin') return fail(ctx.res, 403, '只有负责人能把班转给别的老师');
+    const t = await repo.users.byId(ctx.body.teacherId);
+    if (!t || t.role === 'student') return fail(ctx.res, 3013, '找不到这位老师');
+    if (!t.active) return fail(ctx.res, 3013, '这位老师的账号已停用');
+    await repo.classes.setTeacher(cls.id, t.id);
+  }
+  await repo.classes.update(cls.id, { name: f.name, subjectId: f.subject.id, gradeBand: f.gradeBand });
+  ok(ctx.res, await classView(await repo.classes.byId(cls.id)));
 }, { roles: ['teacher', 'admin'] });
 
 on('DELETE', '/api/classes/:id', async (ctx) => {
@@ -732,7 +748,12 @@ on('GET', '/api/admin/teachers', async (ctx) => {
 on('POST', '/api/admin/teachers', async (ctx) => {
   const name = String(ctx.body.name || '').trim().slice(0, 20);
   if (!name) return fail(ctx.res, 1001, '请填写老师姓名');
-  if (await repo.users.staffByName(name)) return fail(ctx.res, 3013, '已经有同名的老师，换个写法（比如加上科目）');
+  const dup = await repo.users.staffByName(name);
+  if (dup) {
+    return fail(ctx.res, 3013, dup.active
+      ? `已经有一个叫「${name}」的账号了。要么给这位老师换个写法（比如「${name}（语文）」），要么直接用原账号并重置口令`
+      : `有一个已停用的「${name}」账号占着这个名字。可以把它恢复后重置口令，或者给它改名/删除后再新建`);
+  }
   const code = staffCode();
   const user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'teacher', name });
   await repo.users.setLoginCode(user.id, sha256(code));
@@ -752,6 +773,16 @@ on('PUT', '/api/admin/teachers/:id', async (ctx) => {
   const u = await repo.users.byId(ctx.params.id);
   if (!u || u.role === 'student') return fail(ctx.res, 3013, '账号不存在');
   if (u.id === ctx.user.id && ctx.body.active === false) return fail(ctx.res, 1001, '不能停用自己');
+  if (ctx.body.role && ctx.body.role !== u.role) {
+    if (!['teacher', 'admin'].includes(ctx.body.role)) return fail(ctx.res, 1001, '身份不对');
+    if (u.id === ctx.user.id) return fail(ctx.res, 1001, '不能改自己的身份，请让另一位负责人来改');
+    if (ctx.body.role === 'teacher') {
+      const admins = (await repo.users.staff()).filter((x) => x.role === 'admin' && x.active);
+      if (admins.length <= 1) return fail(ctx.res, 3013, '至少要留一位负责人');
+      if (!u.loginCode) return fail(ctx.res, 3013, '这个账号还没有口令，先点「重置口令」再改成老师');
+    }
+    await repo.users.setRole(u.id, ctx.body.role);
+  }
   if (ctx.body.name != null) {
     const name = String(ctx.body.name).trim().slice(0, 20);
     const other = await repo.users.staffByName(name);
@@ -763,11 +794,23 @@ on('PUT', '/api/admin/teachers/:id', async (ctx) => {
   ok(ctx.res, { ok: true });
 }, { roles: ['admin'] });
 
+/** 把一位老师名下的班全部转给另一位：换人带班、离职交接时用 */
+on('POST', '/api/admin/teachers/:id/transfer', async (ctx) => {
+  const from = await repo.users.byId(ctx.params.id);
+  const to = await repo.users.byId(ctx.body.toId);
+  if (!from || from.role === 'student') return fail(ctx.res, 3013, '账号不存在');
+  if (!to || to.role === 'student') return fail(ctx.res, 3013, '请选择要转给哪位老师');
+  if (from.id === to.id) return fail(ctx.res, 1001, '不能转给自己');
+  if (!to.active) return fail(ctx.res, 3013, '这位老师的账号已停用');
+  const moved = await repo.classes.moveAll(from.id, to.id);
+  ok(ctx.res, { moved, to: to.name });
+}, { roles: ['admin'] });
+
 on('DELETE', '/api/admin/teachers/:id', async (ctx) => {
   const u = await repo.users.byId(ctx.params.id);
   if (!u || u.role === 'student') return fail(ctx.res, 3013, '账号不存在');
   if (u.id === ctx.user.id) return fail(ctx.res, 1001, '不能删自己');
-  if (await repo.classes.countByTeacher(u.id)) return fail(ctx.res, 3013, '这位老师名下还有班级，先把班转走或删掉');
+  if (await repo.classes.countByTeacher(u.id)) return fail(ctx.res, 3013, '这位老师名下还有班级，先用「转出班级」把班转给别人');
   await repo.users.remove(u.id);
   ok(ctx.res, { ok: true });
 }, { roles: ['admin'] });

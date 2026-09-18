@@ -198,8 +198,41 @@ const TAG = '__e2e_' + Date.now();
   check('停用的账号登录不了', /停用/.test(stopped || ''), stopped);
   const busy = await expectFail('DELETE', `/api/admin/teachers/${staff.id}`, null, T.token);
   check('名下还有班的老师不能直接删', /还有班级/.test(busy || ''), busy);
+
+  // 同名提示要说清楚怎么办
+  const dupName = await expectFail('POST', '/api/admin/teachers', { name: staff.name }, T.token);
+  check('同名账号给出可操作的提示', /停用|重置口令/.test(dupName || ''), dupName);
+
+  // 换人带班：班连同学生、作业一起转走
+  const helper2 = await call('POST', '/api/admin/teachers', { name: TAG + '孙老师' }, T.token);
+  const moved = await call('POST', `/api/admin/teachers/${staff.id}/transfer`, { toId: helper2.id }, T.token);
+  check('一键把某位老师的班全部转走', moved.moved === 1 && moved.to === helper2.name, `${moved.moved} 个班 → ${moved.to}`);
+  const nowHis = (await call('GET', '/api/classes', null, T.token)).find((c) => c.id === otherCls.id);
+  check('转班后任课老师变了', nowHis.teacherName === helper2.name, nowHis.teacherName);
+
+  // 身份互换：老师升负责人、负责人降回老师
+  await call('PUT', `/api/admin/teachers/${helper2.id}`, { role: 'admin' }, T.token);
+  const asAdmin = await call('POST', '/api/auth/login', { role: 'teacher', name: helper2.name, teacherCode: helper2.code });
+  check('升为负责人后能看家长预约', asAdmin.user.role === 'admin' && Array.isArray(await call('GET', '/api/admin/leads', null, asAdmin.token)), asAdmin.user.role);
+  const selfDemote = await expectFail('PUT', `/api/admin/teachers/${asAdmin.user.id}`, { role: 'teacher' }, asAdmin.token);
+  check('不能改自己的身份', /不能改自己/.test(selfDemote || ''), selfDemote);
+  await call('PUT', `/api/admin/teachers/${helper2.id}`, { role: 'teacher' }, T.token);
+  const backTeacher = await call('POST', '/api/auth/login', { role: 'teacher', name: helper2.name, teacherCode: helper2.code });
+  check('降回老师后看不到家长预约', backTeacher.user.role === 'teacher'
+    && /无权限/.test(await expectFail('GET', '/api/admin/leads', null, backTeacher.token) || ''), backTeacher.user.role);
+
+  // 单个班改任课老师（停用的账号不能接班，先恢复）
+  const toStopped = await expectFail('PUT', `/api/classes/${otherCls.id}`,
+    { subjectId: zhSub.id, gradeBand: '初中', name: otherCls.name, teacherId: staff.id }, T.token);
+  check('不能把班转给已停用的账号', /已停用/.test(toStopped || ''), toStopped);
+  await call('PUT', `/api/admin/teachers/${staff.id}`, { active: true }, T.token);
+  await call('PUT', `/api/classes/${otherCls.id}`, { subjectId: zhSub.id, gradeBand: '初中', name: otherCls.name, teacherId: staff.id }, T.token);
+  const backToStaff = (await call('GET', '/api/classes', null, T.token)).find((c) => c.id === otherCls.id);
+  check('单个班也能换老师', backToStaff.teacherName === staff.name, backToStaff.teacherName);
+
   await call('DELETE', `/api/classes/${otherCls.id}`, null, T.token);
   await call('DELETE', `/api/admin/teachers/${staff.id}`, null, T.token);
+  await call('DELETE', `/api/admin/teachers/${helper2.id}`, null, T.token);
   check('班转走后可以删账号', !(await call('GET', '/api/admin/teachers', null, T.token)).some((u) => u.id === staff.id), '');
 
   const forbid = await expectFail('POST', '/api/admin/books', { title: 'x' }, S.token);

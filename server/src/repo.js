@@ -117,6 +117,7 @@ const users = {
   },
   async setLoginCode(id, hash) { q('UPDATE users SET login_code=? WHERE id=?').run(hash, num(id)); },
   async setActive(id, on) { q('UPDATE users SET active=? WHERE id=?').run(on ? 1 : 0, num(id)); },
+  async setRole(id, role) { q('UPDATE users SET role=? WHERE id=?').run(role, num(id)); },
   async rename(id, name) { q('UPDATE users SET name=? WHERE id=?').run(name, num(id)); },
   async remove(id) {
     q('DELETE FROM sessions WHERE user_id=?').run(num(id));
@@ -163,6 +164,16 @@ const classes = {
   async update(id, { name, subjectId, gradeBand }) {
     q('UPDATE classes SET name=?, subject_id=?, grade_band=? WHERE id=?').run(name, num(subjectId), gradeBand || '', num(id));
     return classes.byId(id);
+  },
+  /** 换任课老师：一个班转给另一位老师 */
+  async setTeacher(id, teacherId) {
+    q('UPDATE classes SET teacher_id=? WHERE id=?').run(num(teacherId), num(id));
+    return classes.byId(id);
+  },
+  /** 一位老师名下的班全部转走（离职、换人带班时用） */
+  async moveAll(fromTeacherId, toTeacherId) {
+    const r = q('UPDATE classes SET teacher_id=? WHERE teacher_id=?').run(num(toTeacherId), num(fromTeacherId));
+    return Number(r.changes || 0);
   },
   /** 删班：成员、教材授权一起删；有作业的班由调用方拦住 */
   async remove(id) {
