@@ -273,6 +273,7 @@ on('DELETE', '/api/classes/:id', async (ctx) => {
   if (!cls) return fail(ctx.res, 3001, '班级不存在');
   if (ctx.user.role === 'teacher' && cls.teacherId !== ctx.user.id) return fail(ctx.res, 403, '只能删除自己带的班');
   if (await repo.homeworks.countByClass(cls.id)) return fail(ctx.res, 3009, '这个班布置过作业，不能删除');
+  if (await repo.classes.attendanceCount(cls.id)) return fail(ctx.res, 3009, '这个班点过名，课时记录要留底，不能删除');
   await repo.classes.remove(cls.id);
   ok(ctx.res, { ok: true });
 }, { roles: ['teacher', 'admin'] });
@@ -1032,6 +1033,340 @@ on('POST', '/api/submissions/:id/grade', async (ctx) => {
   if (first) await repo.users.addStars(sub.studentId, stars * 2 + (ctx.body.excellent ? 10 : 0));
   ok(ctx.res, { score, maxScore, stars });
 }, { roles: ['teacher', 'admin'] });
+
+/* ================= 教务档案：学员档案、课时包、点名、请假 =================
+ * 课时即金钱：点名才扣课时，每一笔都写流水，老师能看剩余、负责人才能看金额。
+ */
+const YUAN = (fen) => Math.round((Number(fen) || 0)) / 100;
+const toFen = (yuan) => Math.round((Number(yuan) || 0) * 100);
+const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+
+/** 老师只能看自己班里的学生，负责人看全校 */
+async function visibleStudentIds(user) {
+  if (user.role === 'admin') return null;                      // null = 不限
+  const ids = await repo.classes.idsForUser(user);
+  const out = new Set();
+  for (const cid of ids) for (const m of await repo.classes.members(cid)) out.add(m.id);
+  return [...out];
+}
+
+const pkgView = (p, subjects, withMoney) => {
+  const total = (p.totalHours || 0) + (p.giftHours || 0);
+  const v = {
+    id: p.id, subject: subjectView(subjects.find((x) => x.id === p.subjectId)),
+    totalHours: p.totalHours, giftHours: p.giftHours, sumHours: total,
+    usedHours: p.usedHours, leftHours: Math.round((total - p.usedHours) * 100) / 100,
+    purchasedAt: p.purchasedAt, expiresAt: p.expiresAt, pausedAt: p.pausedAt,
+    status: p.status, note: p.note,
+  };
+  if (withMoney) { v.priceOriginal = YUAN(p.priceOriginal); v.pricePaid = YUAN(p.pricePaid); }
+  return v;
+};
+
+/** 汇总一个学生的课时：剩余、最近到期日 */
+function hoursOf(list) {
+  let left = 0, expires = null;
+  for (const p of list) {
+    if (p.status === 'finished') continue;
+    left += (p.totalHours || 0) + (p.giftHours || 0) - (p.usedHours || 0);
+    if (p.status === 'active' && p.expiresAt && (!expires || p.expiresAt < expires)) expires = p.expiresAt;
+  }
+  return { leftHours: Math.round(left * 100) / 100, expiresAt: expires };
+}
+
+on('GET', '/api/admin/students', async (ctx) => {
+  const only = await visibleStudentIds(ctx.user);
+  const kw = String(ctx.query.q || '').trim();
+  let list = await repo.users.listByRole('student');
+  if (only) list = list.filter((u) => only.includes(u.id));
+  if (kw) list = list.filter((u) => u.name.includes(kw));
+  const ids = list.map((u) => u.id);
+  const [profiles, pkgs] = [await repo.profiles.byUsers(ids), await repo.packages.byStudents(ids)];
+  const classesOf = new Map();
+  for (const cid of await repo.classes.idsForUser(ctx.user.role === 'admin' ? { role: 'admin' } : ctx.user)) {
+    const c = await repo.classes.byId(cid);
+    for (const m of await repo.classes.members(cid)) {
+      const arr = classesOf.get(m.id) || classesOf.set(m.id, []).get(m.id);
+      if (c) arr.push(c.name);
+    }
+  }
+  const out = list.map((u) => {
+    const p = profiles.get(u.id) || {};
+    return { id: u.id, name: u.name, gender: p.gender || '', school: p.school || '', grade: p.grade || '',
+      phone: ctx.user.role === 'admin' ? (p.phone || '') : '', parentName: p.parentName || '',
+      status: p.status || 'active', classes: classesOf.get(u.id) || [],
+      ...hoursOf(pkgs.get(u.id) || []), stars: u.stars };
+  });
+  out.sort((a, b) => (a.status === b.status ? a.name.localeCompare(b.name, 'zh') : a.status === 'active' ? -1 : 1));
+  ok(ctx.res, out);
+}, { roles: ['teacher', 'admin'] });
+
+on('POST', '/api/admin/students', async (ctx) => {
+  const name = String(ctx.body.name || '').trim().slice(0, 20);
+  if (!name) return fail(ctx.res, 1001, '请填写学员姓名');
+  let user = await repo.users.byNameRole(name, 'student');
+  if (!user) user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'student', name });
+  await repo.profiles.save(user.id, ctx.body);
+  if (ctx.body.classId) {
+    if (!await canTouchClass(ctx.user, ctx.body.classId)) return fail(ctx.res, 403, '不能把学生加到别人的班');
+    await repo.classes.addMember(ctx.body.classId, user.id);
+  }
+  ok(ctx.res, { id: user.id, name: user.name });
+}, { roles: ['admin'] });
+
+on('GET', '/api/admin/students/:id', async (ctx) => {
+  const u = await repo.users.byId(ctx.params.id);
+  if (!u || u.role !== 'student') return fail(ctx.res, 3015, '学员不存在');
+  const only = await visibleStudentIds(ctx.user);
+  if (only && !only.includes(u.id)) return fail(ctx.res, 403, '这不是你班上的学生');
+  const subjects = await repo.subjects.all();
+  const admin = ctx.user.role === 'admin';
+  const pkgs = await repo.packages.byStudent(u.id);
+  const classes = [];
+  for (const cid of await repo.classes.idsForUser({ role: 'admin' })) {
+    const members = await repo.classes.members(cid);
+    if (members.some((m) => m.id === u.id)) {
+      const c = await repo.classes.byId(cid);
+      if (c) classes.push({ id: c.id, name: c.name, subject: subjectView(subjects.find((x) => x.id === c.subjectId)) });
+    }
+  }
+  ok(ctx.res, {
+    id: u.id, name: u.name, stars: u.stars, streak: u.streak,
+    profile: (await repo.profiles.byUser(u.id)) || { status: 'active' },
+    classes,
+    packages: pkgs.map((p) => pkgView(p, subjects, admin)),
+    hours: hoursOf(pkgs),
+    logs: (await repo.hourLogs.byStudent(u.id, 30)),
+    attendance: await repo.attendance.byStudent(u.id, 20),
+    leaves: await repo.leaves.byStudent(u.id, 10),
+  });
+}, { roles: ['teacher', 'admin'] });
+
+on('PUT', '/api/admin/students/:id', async (ctx) => {
+  const u = await repo.users.byId(ctx.params.id);
+  if (!u || u.role !== 'student') return fail(ctx.res, 3015, '学员不存在');
+  if (ctx.body.name && String(ctx.body.name).trim()) await repo.users.rename(u.id, String(ctx.body.name).trim().slice(0, 20));
+  ok(ctx.res, await repo.profiles.save(u.id, ctx.body));
+}, { roles: ['admin'] });
+
+on('POST', '/api/admin/students/:id/classes', async (ctx) => {
+  if (!await canTouchClass(ctx.user, ctx.body.classId)) return fail(ctx.res, 403, '不能加到别人的班');
+  await repo.classes.addMember(ctx.body.classId, ctx.params.id);
+  ok(ctx.res, { ok: true });
+}, { roles: ['teacher', 'admin'] });
+
+/* ---------- 课时包 ---------- */
+on('POST', '/api/admin/packages', async (ctx) => {
+  const b = ctx.body;
+  const u = await repo.users.byId(b.studentId);
+  if (!u || u.role !== 'student') return fail(ctx.res, 3015, '学员不存在');
+  if (!(Number(b.totalHours) > 0 || Number(b.giftHours) > 0)) return fail(ctx.res, 1001, '请填写课时数');
+  if (b.purchasedAt && !isDate(b.purchasedAt)) return fail(ctx.res, 1001, '购买日期格式不对');
+  if (b.expiresAt && !isDate(b.expiresAt)) return fail(ctx.res, 1001, '到期日期格式不对');
+  const p = await repo.packages.create({
+    studentId: u.id, subjectId: b.subjectId, courseId: b.courseId,
+    totalHours: Number(b.totalHours) || 0, giftHours: Number(b.giftHours) || 0,
+    priceOriginal: toFen(b.priceOriginal), pricePaid: toFen(b.pricePaid),
+    purchasedAt: b.purchasedAt || today(), expiresAt: b.expiresAt || '', note: String(b.note || '').slice(0, 200),
+  });
+  ok(ctx.res, pkgView(p, await repo.subjects.all(), true));
+}, { roles: ['admin'] });
+
+on('PUT', '/api/admin/packages/:id', async (ctx) => {
+  const cur = await repo.packages.byId(ctx.params.id);
+  if (!cur) return fail(ctx.res, 3016, '课包不存在');
+  const b = ctx.body;
+  const patch = { note: b.note, subjectId: b.subjectId };
+  if (b.totalHours != null) patch.totalHours = Number(b.totalHours);
+  if (b.giftHours != null) patch.giftHours = Number(b.giftHours);
+  if (b.priceOriginal != null) patch.priceOriginal = toFen(b.priceOriginal);
+  if (b.pricePaid != null) patch.pricePaid = toFen(b.pricePaid);
+  if (b.purchasedAt != null) patch.purchasedAt = b.purchasedAt;
+  if (b.expiresAt != null) patch.expiresAt = b.expiresAt;
+  if (b.status && ['active', 'finished'].includes(b.status)) patch.status = b.status;
+  ok(ctx.res, pkgView(await repo.packages.update(cur.id, patch), await repo.subjects.all(), true));
+}, { roles: ['admin'] });
+
+/** 停课：到期日按停课天数顺延，恢复时自动补上 */
+on('POST', '/api/admin/packages/:id/pause', async (ctx) => {
+  const p = await repo.packages.byId(ctx.params.id);
+  if (!p) return fail(ctx.res, 3016, '课包不存在');
+  if (p.status !== 'active') return fail(ctx.res, 3016, '只有在用的课包才能暂停');
+  await repo.packages.update(p.id, { status: 'paused', pausedAt: today() });
+  ok(ctx.res, { ok: true, pausedAt: today() });
+}, { roles: ['admin'] });
+
+on('POST', '/api/admin/packages/:id/resume', async (ctx) => {
+  const p = await repo.packages.byId(ctx.params.id);
+  if (!p) return fail(ctx.res, 3016, '课包不存在');
+  if (p.status !== 'paused') return fail(ctx.res, 3016, '这个课包没有在暂停');
+  let expiresAt = p.expiresAt;
+  if (p.pausedAt && isDate(p.pausedAt) && isDate(expiresAt || '')) {
+    const days = Math.max(0, Math.round((Date.parse(today()) - Date.parse(p.pausedAt)) / 86400000));
+    expiresAt = new Date(Date.parse(expiresAt) + days * 86400000).toISOString().slice(0, 10);   // 停了几天就顺延几天
+  }
+  await repo.packages.update(p.id, { status: 'active', pausedAt: null, expiresAt });
+  ok(ctx.res, { ok: true, expiresAt });
+}, { roles: ['admin'] });
+
+/** 手工加减课时（补课、退课、录错了） */
+on('POST', '/api/admin/packages/:id/adjust', async (ctx) => {
+  const p = await repo.packages.byId(ctx.params.id);
+  if (!p) return fail(ctx.res, 3016, '课包不存在');
+  const hours = Number(ctx.body.hours);
+  if (!hours || Math.abs(hours) > 1000) return fail(ctx.res, 1001, '请填写要加减的课时数');
+  await repo.packages.addUsed(p.id, -hours);                   // 加课时 = 少用了
+  await repo.hourLogs.add({ packageId: p.id, studentId: p.studentId, hours, reason: 'adjust',
+    date: today(), note: String(ctx.body.note || '').slice(0, 100), createdBy: ctx.user.id });
+  ok(ctx.res, pkgView(await repo.packages.byId(p.id), await repo.subjects.all(), true));
+}, { roles: ['admin'] });
+
+on('DELETE', '/api/admin/packages/:id', async (ctx) => {
+  const p = await repo.packages.byId(ctx.params.id);
+  if (!p) return fail(ctx.res, 3016, '课包不存在');
+  if (p.usedHours > 0) return fail(ctx.res, 3016, '这个课包已经上过课，不能删除，可以改成「已结束」');
+  await repo.packages.remove(p.id);
+  ok(ctx.res, { ok: true });
+}, { roles: ['admin'] });
+
+/* ---------- 点名：到课扣课时，已批准的请假不扣 ---------- */
+const ATT_STATUS = ['present', 'leave', 'absent'];
+
+on('GET', '/api/classes/:id/attendance', async (ctx) => {
+  const cls = await repo.classes.byId(ctx.params.id);
+  if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  if (!await canTouchClass(ctx.user, cls.id)) return fail(ctx.res, 403, '这不是你带的班');
+  const date = isDate(ctx.query.date) ? ctx.query.date : today();
+  const members = await repo.classes.members(cls.id);
+  const ids = members.map((m) => m.id);
+  const [pkgs, done] = [await repo.packages.byStudents(ids), await repo.attendance.byClassDate(cls.id, date)];
+  const onLeave = await repo.leaves.approvedOn(cls.id, date);
+  const students = members.map((m) => {
+    const rec = done.find((a) => a.studentId === m.id);
+    return { id: m.id, name: m.name, ...hoursOf(pkgs.get(m.id) || []),
+      status: rec ? rec.status : (onLeave.includes(m.id) ? 'leave' : ''),
+      hours: rec ? rec.hours : null, approvedLeave: onLeave.includes(m.id) };
+  });
+  ok(ctx.res, { date, className: cls.name, subject: subjectView(await repo.subjects.byId(cls.subjectId)),
+    defaultHours: await repo.settings.get('hours_class_' + cls.id, 1),
+    students, dates: await repo.attendance.datesOfClass(cls.id, 10) });
+}, { roles: ['teacher', 'admin'] });
+
+on('POST', '/api/classes/:id/attendance', async (ctx) => {
+  const cls = await repo.classes.byId(ctx.params.id);
+  if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  if (!await canTouchClass(ctx.user, cls.id)) return fail(ctx.res, 403, '这不是你带的班');
+  const date = isDate(ctx.body.date) ? ctx.body.date : today();
+  const per = Math.min(10, Math.max(0.5, Number(ctx.body.hours) || 1));
+  const records = Array.isArray(ctx.body.records) ? ctx.body.records : [];
+  if (!records.length) return fail(ctx.res, 1001, '还没有点名');
+
+  const members = await repo.classes.members(cls.id);
+  const noPackage = [];
+  let marked = 0, used = 0;
+  for (const r of records) {
+    if (!members.some((m) => m.id === Number(r.studentId))) continue;
+    if (!ATT_STATUS.includes(r.status)) continue;
+    const prev = (await repo.attendance.byClassDate(cls.id, date)).find((a) => a.studentId === Number(r.studentId));
+    // 改点名结果：先把上次扣的课时退回去，再按新的扣
+    if (prev && prev.hours && prev.packageId) {
+      await repo.packages.addUsed(prev.packageId, -prev.hours);
+      await repo.hourLogs.add({ packageId: prev.packageId, studentId: prev.studentId, hours: prev.hours,
+        reason: 'revert', refId: prev.id, date, note: '修改点名，退回课时', createdBy: ctx.user.id });
+    }
+    const hours = r.status === 'leave' ? 0 : (Number(r.hours) > 0 ? Number(r.hours) : per);
+    let pkg = null;
+    if (hours > 0) {
+      pkg = await repo.packages.pickForConsume(r.studentId, cls.subjectId, date);
+      if (!pkg) noPackage.push((members.find((m) => m.id === Number(r.studentId)) || {}).name);
+    }
+    const att = await repo.attendance.upsert({ classId: cls.id, studentId: r.studentId, date, status: r.status,
+      hours: pkg ? hours : 0, packageId: pkg ? pkg.id : null, note: String(r.note || '').slice(0, 100), createdBy: ctx.user.id });
+    if (pkg && hours > 0) {
+      await repo.packages.addUsed(pkg.id, hours);
+      await repo.hourLogs.add({ packageId: pkg.id, studentId: r.studentId, hours: -hours, reason: r.status,
+        refId: att.id, date, createdBy: ctx.user.id });
+      used += hours;
+    }
+    marked++;
+  }
+  await repo.settings.set('hours_class_' + cls.id, per);
+  ok(ctx.res, { date, marked, usedHours: Math.round(used * 100) / 100, noPackage: [...new Set(noPackage)] });
+}, { roles: ['teacher', 'admin'] });
+
+/* ---------- 请假：家长在学生端提交，老师审批 ---------- */
+on('POST', '/api/leaves', async (ctx) => {
+  const date = isDate(ctx.body.date) ? ctx.body.date : null;
+  if (!date) return fail(ctx.res, 1001, '请选择请假日期');
+  if (date < today()) return fail(ctx.res, 1001, '只能给今天或以后请假');
+  const classIds = await repo.classes.idsForUser(ctx.user);
+  const classId = classIds.includes(Number(ctx.body.classId)) ? Number(ctx.body.classId) : null;
+  const dup = (await repo.leaves.byStudent(ctx.user.id, 30)).find((l) => l.date === date && l.status !== 'rejected' && l.classId === classId);
+  if (dup) return fail(ctx.res, 3017, '这一天已经请过假了');
+  const l = await repo.leaves.create({ studentId: ctx.user.id, classId, date, reason: String(ctx.body.reason || '').slice(0, 100) });
+  ok(ctx.res, l);
+}, { roles: ['student'] });
+
+on('GET', '/api/admin/leaves', async (ctx) => {
+  const only = await visibleStudentIds(ctx.user);
+  ok(ctx.res, { list: await repo.leaves.list(ctx.query.status || null, only), pending: await repo.leaves.countPending(only) });
+}, { roles: ['teacher', 'admin'] });
+
+on('POST', '/api/admin/leaves/:id/:action', async (ctx) => {
+  const l = await repo.leaves.byId(ctx.params.id);
+  if (!l) return fail(ctx.res, 3017, '请假记录不存在');
+  const only = await visibleStudentIds(ctx.user);
+  if (only && !only.includes(l.studentId)) return fail(ctx.res, 403, '这不是你班上的学生');
+  const map = { approve: 'approved', reject: 'rejected' };
+  const st = map[ctx.params.action];
+  if (!st) return fail(ctx.res, 1001, '操作不对');
+  await repo.leaves.setStatus(l.id, st, ctx.user.id);
+  ok(ctx.res, { ok: true, status: st });
+}, { roles: ['teacher', 'admin'] });
+
+/* ---------- 学生端：我的课时、请假 ---------- */
+on('GET', '/api/me/archive', async (ctx) => {
+  const subjects = await repo.subjects.all();
+  const pkgs = await repo.packages.byStudent(ctx.user.id);
+  ok(ctx.res, {
+    hours: hoursOf(pkgs),
+    packages: pkgs.filter((p) => p.status !== 'finished').map((p) => pkgView(p, subjects, false)),
+    attendance: await repo.attendance.byStudent(ctx.user.id, 10),
+    leaves: await repo.leaves.byStudent(ctx.user.id, 10),
+  });
+}, { roles: ['student'] });
+
+/* ---------- 学校简介 ---------- */
+const ABOUT_KEY = 'about';
+on('GET', '/api/about', async (ctx) => {
+  const a = await repo.settings.get(ABOUT_KEY, null);
+  if (!a) return ok(ctx.res, { title: '', text: '', images: [] });
+  const images = [];
+  for (const id of a.imageIds || []) { const v = await assetView(id); if (v) images.push(v.url); }
+  ok(ctx.res, { title: a.title || '', text: a.text || '', images, updatedAt: a.updatedAt || '' });
+}, { auth: false });
+
+on('PUT', '/api/admin/about', async (ctx) => {
+  const cur = (await repo.settings.get(ABOUT_KEY, null)) || {};
+  const imageIds = Array.isArray(cur.imageIds) ? [...cur.imageIds] : [];
+  for (const b64 of (Array.isArray(ctx.body.images) ? ctx.body.images : []).slice(0, 6)) {
+    const img = decodeImage(b64, 5 * 1024 * 1024);
+    if (img.error) return fail(ctx.res, 1001, '简介图片：' + img.error);
+    const { asset } = await putAssetBuf('photo', img.buf, img.ext, { mime: 'image/' + img.ext });
+    imageIds.push(asset.id);
+  }
+  const keep = Array.isArray(ctx.body.keepImages) ? ctx.body.keepImages.map(Number) : null;
+  const finalIds = (keep ? imageIds.filter((id) => keep.includes(id)) : imageIds).slice(-6);
+  await repo.settings.set(ABOUT_KEY, {
+    title: String(ctx.body.title == null ? cur.title || '' : ctx.body.title).slice(0, 60),
+    text: String(ctx.body.text == null ? cur.text || '' : ctx.body.text).slice(0, 4000),
+    imageIds: finalIds, updatedAt: today(),
+  });
+  const a = await repo.settings.get(ABOUT_KEY, {});
+  const images = [];
+  for (const id of a.imageIds || []) { const v = await assetView(id); if (v) images.push({ id, url: v.url }); }
+  ok(ctx.res, { title: a.title, text: a.text, images });
+}, { roles: ['admin'] });
 
 /* ================= 星星奖品：攒够星星换礼物 ================= */
 async function rewardView(r) {

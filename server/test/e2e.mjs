@@ -438,6 +438,74 @@ const TAG = '__e2e_' + Date.now();
   await call('DELETE', `/api/classes/${hwCls.id}`, null, T.token);
   for (const rw of [reward, tooBig]) await call('DELETE', `/api/admin/rewards/${rw.id}`, null, T.token).catch(() => {});
 
+  log('\n[11] 教务档案：学员、课包、点名、请假');
+  const enSub = (await call('GET', '/api/subjects', null, T.token)).subjects.find((x) => x.code === 'en');
+  const arcCls = await call('POST', '/api/classes', { subjectId: enSub.id, gradeBand: '三四年级', name: TAG + ' 档案班' }, T.token);
+  const arcStu = await call('POST', '/api/admin/students', { name: TAG + '学员', gender: '男', school: '实验小学',
+    grade: '三年级', parentName: '学员妈妈', phone: '13800002222', note: '周六下午', classId: arcCls.id }, T.token);
+  const stuTok = (await call('POST', '/api/auth/login', { role: 'student', name: TAG + '学员' })).token;
+  const arcPkg = await call('POST', '/api/admin/packages', { studentId: arcStu.id, subjectId: enSub.id, totalHours: 40, giftHours: 5,
+    priceOriginal: 4000, pricePaid: 3600, purchasedAt: '2026-01-01', expiresAt: '2027-01-01', note: '暑期班' }, T.token);
+  check('课包：共计=购买+赠送，金额按元存', arcPkg.sumHours === 45 && arcPkg.leftHours === 45 && arcPkg.pricePaid === 3600,
+    `共 ${arcPkg.sumHours} 剩 ${arcPkg.leftHours} 实收 ¥${arcPkg.pricePaid}`);
+
+  const dayOf = (n) => new Date(Date.now() + 8 * 3600e3 + n * 86400e3).toISOString().slice(0, 10);
+  // 家长请假 → 老师准假 → 点名时不扣课时
+  const arcLeave = await call('POST', '/api/leaves', { date: dayOf(1), classId: arcCls.id, reason: '发烧' }, stuTok);
+  const dupLv = await expectFail('POST', '/api/leaves', { date: dayOf(1), classId: arcCls.id }, stuTok);
+  check('同一天不能重复请假', /已经请过假/.test(dupLv || ''), dupLv);
+  const pastLv = await expectFail('POST', '/api/leaves', { date: dayOf(-3) }, stuTok);
+  check('不能给过去的日子请假', /今天或以后/.test(pastLv || ''), pastLv);
+  await call('POST', `/api/admin/leaves/${arcLeave.id}/approve`, {}, T.token);
+  const arcRoster = await call('GET', `/api/classes/${arcCls.id}/attendance?date=${dayOf(1)}`, null, T.token);
+  const rosterRow = arcRoster.students.find((x) => x.id === arcStu.id);
+  check('点名页带出已批准的请假和剩余课时', rosterRow.approvedLeave === true && rosterRow.leftHours === 45, `${rosterRow.name} 剩 ${rosterRow.leftHours}`);
+  const r1 = await call('POST', `/api/classes/${arcCls.id}/attendance`, { date: dayOf(1), hours: 2,
+    records: [{ studentId: arcStu.id, status: 'leave' }] }, T.token);
+  check('请假不扣课时', r1.usedHours === 0, `扣 ${r1.usedHours}`);
+
+  // 到课扣课时，改点名会退回
+  await call('POST', `/api/classes/${arcCls.id}/attendance`, { date: dayOf(0), hours: 2, records: [{ studentId: arcStu.id, status: 'present' }] }, T.token);
+  let arc = await call('GET', '/api/me/archive', null, stuTok);
+  check('到课扣课时，学生端看得到剩余', arc.hours.leftHours === 43, `剩 ${arc.hours.leftHours}`);
+  await call('POST', `/api/classes/${arcCls.id}/attendance`, { date: dayOf(0), hours: 2, records: [{ studentId: arcStu.id, status: 'leave' }] }, T.token);
+  arc = await call('GET', '/api/me/archive', null, stuTok);
+  check('改成请假后课时退回', arc.hours.leftHours === 45, `剩 ${arc.hours.leftHours}`);
+
+  // 手工加减 + 流水
+  await call('POST', `/api/admin/packages/${arcPkg.id}/adjust`, { hours: -3, note: '补上次漏扣' }, T.token);
+  const arcDetail = await call('GET', `/api/admin/students/${arcStu.id}`, null, T.token);
+  check('手工调整进流水，档案能查到', arcDetail.hours.leftHours === 42 && arcDetail.logs.some((l) => l.reason === 'adjust' && l.hours === -3),
+    `剩 ${arcDetail.hours.leftHours}，${arcDetail.logs.length} 条流水`);
+  check('档案里有学员资料和班级', arcDetail.profile.school === '实验小学' && arcDetail.classes.some((c) => c.id === arcCls.id), arcDetail.profile.school);
+
+  // 停课顺延
+  await call('POST', `/api/admin/packages/${arcPkg.id}/pause`, {}, T.token);
+  const pausedPkg = (await call('GET', `/api/admin/students/${arcStu.id}`, null, T.token)).packages[0];
+  check('停课中的课包不计入可用', pausedPkg.status === 'paused', pausedPkg.status);
+  const resumedPkg = await call('POST', `/api/admin/packages/${arcPkg.id}/resume`, {}, T.token);
+  check('恢复上课后到期日顺延', resumedPkg.expiresAt >= '2027-01-01', resumedPkg.expiresAt);
+
+  // 权限：老师看不到金额，看不到别班学生
+  const tOnly = await call('POST', '/api/admin/teachers', { name: TAG + '周老师' }, T.token);
+  const tOnlyTok = (await call('POST', '/api/auth/login', { role: 'teacher', name: tOnly.name, teacherCode: tOnly.code })).token;
+  const notMine = await expectFail('GET', `/api/admin/students/${arcStu.id}`, null, tOnlyTok);
+  check('老师看不到别班学生的档案', /不是你班上/.test(notMine || ''), notMine);
+  await call('PUT', `/api/classes/${arcCls.id}`, { subjectId: enSub.id, gradeBand: '三四年级', name: arcCls.name, teacherId: tOnly.id }, T.token);
+  const asTeacher = await call('GET', `/api/admin/students/${arcStu.id}`, null, tOnlyTok);
+  check('自己班的老师能看剩余课时，但看不到金额和家长手机', asTeacher.hours.leftHours === 42
+    && asTeacher.packages[0].pricePaid === undefined, `剩 ${asTeacher.hours.leftHours}`);
+  const noEdit = await expectFail('PUT', `/api/admin/students/${arcStu.id}`, { note: 'x' }, tOnlyTok);
+  check('老师改不了档案资料', /无权限/.test(noEdit || ''), noEdit);
+
+  // 学校简介
+  await call('PUT', '/api/admin/about', { title: TAG + '学校', text: '办学十年\n主打小班教学' }, T.token);
+  const aboutHtml = await (await fetch(BASE + '/about')).text();
+  check('学校简介公开页', aboutHtml.includes(TAG + '学校') && aboutHtml.includes('主打小班教学') && aboutHtml.includes('预约试听'), '');
+
+  // 清理
+  await call('DELETE', `/api/admin/teachers/${tOnly.id}`, null, T.token).catch(() => {});
+
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);
   check('有作业时拒绝删教材', /还有作业/.test(guarded || ''), guarded);

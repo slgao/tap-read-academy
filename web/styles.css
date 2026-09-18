@@ -558,3 +558,19 @@ div.field > span{display:block;font-size:13px;font-weight:700;color:var(--text-2
 .nowrap{white-space:nowrap}
 .rubric-view{margin-top:10px;padding:10px 12px;background:var(--wash);border-radius:14px}
 .rubric-view .stars{font-size:17px}
+
+/* ---------- 教务档案 ---------- */
+.card.stu{cursor:pointer}
+.right{text-align:right}
+.pkg.paused{opacity:.75;box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--star)}
+.pkg.finished{opacity:.6}
+.pkg.active{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--mint)}
+.logline{padding:5px 0;border-top:1px solid var(--line)}
+.logline:first-child{border-top:0}
+.logline .minus{color:var(--coral-shade)} .logline .plus{color:var(--mint-shade)}
+.card.roll{padding:12px 14px}
+input[type="date"]{padding:8px 10px;font-size:14px}
+.about-photos{grid-template-columns:1fr}
+.pub-photo.wide{aspect-ratio:auto}
+.pub-photo.wide img{height:auto;object-fit:contain}
+.about-text p{margin:0 0 10px;font-size:15.5px;line-height:1.8}

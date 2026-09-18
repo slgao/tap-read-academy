@@ -300,6 +300,97 @@ for (const [code, list] of Object.entries(COURSES)) {
   if (sid) list.forEach((name, i) => insCourse.run(sid.id, name, i + 1));
 }
 
+/* ================= 教务档案：学员档案、课时包、考勤、请假 =================
+ * 课时是钱，所有增减都要留痕：packages 记总量，hour_logs 记每一笔，
+ * attendance 记每次点名，三者对得上账，家长来问能一条条摆出来。
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS student_profiles (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id),
+  gender TEXT,                       -- 男 | 女 | ''
+  school TEXT,                       -- 就读学校
+  grade TEXT,                        -- 年级
+  parent_name TEXT,
+  phone TEXT,
+  phone2 TEXT,
+  note TEXT,                         -- 其他
+  status TEXT DEFAULT 'active',      -- active 在读 | paused 停课 | left 已结业
+  created_at TEXT,
+  updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS packages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  subject_id INTEGER REFERENCES subjects(id),
+  course_id INTEGER REFERENCES courses(id),
+  total_hours REAL DEFAULT 0,        -- 购买课时
+  gift_hours REAL DEFAULT 0,         -- 赠送课时
+  used_hours REAL DEFAULT 0,         -- 已消耗（由流水累计）
+  price_original INTEGER DEFAULT 0,  -- 原价，单位：分
+  price_paid INTEGER DEFAULT 0,      -- 实收，单位：分
+  purchased_at TEXT,                 -- 购买日期
+  expires_at TEXT,                   -- 到期日期
+  paused_at TEXT,                    -- 停课起始日（恢复时按天数顺延到期日）
+  status TEXT DEFAULT 'active',      -- active | paused | finished
+  note TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_package_student ON packages(student_id, status);
+
+CREATE TABLE IF NOT EXISTS hour_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  package_id INTEGER REFERENCES packages(id),
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  hours REAL NOT NULL,               -- 负数是扣课时，正数是补回或赠送
+  reason TEXT,                       -- attend 上课 | absent 旷课 | adjust 手工调整 | revert 撤销
+  ref_id INTEGER,                    -- 对应的考勤记录
+  date TEXT,
+  note TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_hourlog_student ON hour_logs(student_id, id);
+CREATE INDEX IF NOT EXISTS idx_hourlog_package ON hour_logs(package_id, id);
+
+CREATE TABLE IF NOT EXISTS attendance (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  class_id INTEGER NOT NULL REFERENCES classes(id),
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  date TEXT NOT NULL,
+  status TEXT NOT NULL,              -- present 到课 | leave 请假 | absent 旷课
+  hours REAL DEFAULT 0,              -- 本次扣掉的课时
+  package_id INTEGER REFERENCES packages(id),
+  note TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT,
+  UNIQUE (class_id, student_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_attend_class_date ON attendance(class_id, date);
+CREATE INDEX IF NOT EXISTS idx_attend_student ON attendance(student_id, date);
+
+CREATE TABLE IF NOT EXISTS leaves (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  class_id INTEGER REFERENCES classes(id),
+  date TEXT NOT NULL,
+  reason TEXT,
+  status TEXT DEFAULT 'pending',     -- pending 待审 | approved 已批准 | rejected 未批准
+  handled_by INTEGER REFERENCES users(id),
+  created_at TEXT,
+  handled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_leave_status ON leaves(status, id);
+CREATE INDEX IF NOT EXISTS idx_leave_student ON leaves(student_id, date);
+
+/* 学校简介等后台可编辑的内容 */
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TEXT
+);
+`);
+
 /* 星星奖品：攒够星星换实物礼物，老师在后台发放 */
 db.exec(`
 CREATE TABLE IF NOT EXISTS rewards (

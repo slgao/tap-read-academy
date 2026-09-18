@@ -747,6 +747,10 @@
           </div></div>
         <div class="card"><div class="section-title mb">近 4 周打卡</div><div class="calendar">${cells.join('')}</div>
           <div class="muted small mt">当天学习满 ${Math.max(1, Math.round(sum.needSeconds / 60))} 分钟就盖一个印</div></div>
+        <div class="card" id="ar-card"><div class="row between mb"><div class="section-title">我的课时</div>
+            <button class="btn sm ghost" data-act="askLeave">请假</button></div>
+          <div id="ar-body"><div class="muted small">加载中…</div></div>
+        </div>
         <div class="card" id="rw-card"><div class="row between mb"><div class="section-title">星星奖品</div>
             <span class="star-pill">${ic('star')}<span>${sum.stars}</span></span></div>
           <div class="muted small">攒够星星就能换礼物，换好了去前台找老师领。</div>
@@ -770,8 +774,34 @@
         </div>
         <div class="card"><div class="row between"><span>切换账号</span><button class="btn sm grey" data-act="logout">退出登录</button></div></div>`;
     },
-    after: () => { drawRewards(); },
+    after: () => { drawArchive(); drawRewards(); },
   };
+
+  /** 我的课时：剩多少、什么时候到期、最近上了几次课、请假记录 */
+  const LEAVE_NAME = { pending: '待老师确认', approved: '已准假', rejected: '未准假' };
+  const ATT_NAME2 = { present: '到课', leave: '请假', absent: '缺课' };
+  async function drawArchive() {
+    const box = document.getElementById('ar-body');
+    if (!box) return;
+    try {
+      const d = await API.get('/api/me/archive');
+      const list = d.packages.filter((p) => p.status !== 'finished');
+      box.innerHTML = `
+        <div class="row between"><div class="bigscore">${d.hours.leftHours}<small> 课时</small></div>
+          ${d.hours.expiresAt ? `<span class="muted small">${esc(d.hours.expiresAt)} 到期</span>` : ''}</div>
+        ${list.length ? list.map((p) => `<div class="muted small mt">${p.subject ? esc(p.subject.name) : '不限科目'}：
+          共 ${p.sumHours} 课时，已上 ${p.usedHours}，剩 ${p.leftHours}${p.status === 'paused' ? '（停课中）' : ''}</div>`).join('')
+          : '<div class="muted small mt">还没有课包，可以问老师</div>'}
+        ${d.attendance.length ? `<div class="hr"></div><div class="muted small mb">最近上课</div>
+          ${d.attendance.slice(0, 5).map((a) => `<div class="row between" style="padding:3px 0">
+            <span class="small">${esc(a.date)} ${esc(a.className || '')}</span>
+            <span class="muted small">${ATT_NAME2[a.status] || ''}${a.hours ? ` −${a.hours}` : ''}</span></div>`).join('')}` : ''}
+        ${d.leaves.length ? `<div class="hr"></div><div class="muted small mb">我的请假</div>
+          ${d.leaves.slice(0, 5).map((l) => `<div class="row between" style="padding:3px 0">
+            <span class="small">${esc(l.date)}${l.reason ? ' · ' + esc(l.reason) : ''}</span>
+            <span class="muted small">${LEAVE_NAME[l.status]}</span></div>`).join('')}` : ''}`;
+    } catch (e) { box.innerHTML = `<div class="muted small">${esc(e.message)}</div>`; }
+  }
 
   /** 奖品墙：显示进度，够了才能点兑换 */
   async function drawRewards() {
@@ -1166,6 +1196,17 @@
       catch (e) { toast(e.message); }
     },
     pickSubj(el) { S.subj = el.dataset.code; render(); },
+    async askLeave() {
+      const me = await API.get('/api/me');
+      const date = (prompt('请哪天的假？（格式 2026-09-20）', dayKey(Date.now() + 86400000)) || '').trim();
+      if (!date) return;
+      const classId = me.classes.length === 1 ? me.classes[0].id : null;
+      const reason = (prompt('原因（老师会看到，可不填）', '') || '').trim();
+      try {
+        await API.post('/api/leaves', { date, classId, reason });
+        toast('已提交，等老师确认', 2600); render();
+      } catch (e) { toast(e.message, 2600); }
+    },
     async redeem(el) {
       if (!confirm(`用 ${el.dataset.stars} 颗星换「${el.dataset.name}」？换了之后星星会扣掉，去前台找老师领。`)) return;
       el.disabled = true;

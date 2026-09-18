@@ -195,6 +195,25 @@ async function galleryPage(req, res) {
   }));
 }
 
+async function aboutPage(req, res) {
+  const a = (await repo.settings.get('about', null)) || {};
+  const images = [];
+  for (const id of a.imageIds || []) { const x = await repo.assets.byId(id); if (x) images.push(store.urlOf(x.relPath)); }
+  const title = a.title || SCHOOL;
+  const text = String(a.text || '').trim();
+  const body = `
+    <section class="pub-intro">
+      <h1>${esc(title)}</h1>
+      <p class="muted">成为孩子期待的一堂课</p>
+    </section>
+    ${images.length ? `<section class="pub-photos about-photos">${images.map((u) => `<button class="pub-photo wide" data-src="${esc(u)}"><img src="${esc(u)}" alt="学校照片" loading="lazy"></button>`).join('')}</section>` : ''}
+    ${text ? `<section class="card"><div class="about-text">${text.split(/\n+/).map((line) => `<p>${esc(line)}</p>`).join('')}</div></section>`
+      : '<section class="card center"><p class="muted">简介整理中，欢迎先预约一节试听课。</p></section>'}
+    ${await leadForm({ source: 'trial' })}`;
+  send(res, 200, page(req, { title: `${title} · 学校简介`, description: text.slice(0, 60) || `${SCHOOL}，成为孩子期待的一堂课`,
+    image: images[0] || null, body }));
+}
+
 async function trialPage(req, res) {
   const body = `
     <section class="pub-intro">
@@ -215,6 +234,7 @@ async function handlePublic(req, res, url) {
     if (p === '/s' || p.startsWith('/s/')) { notFound(req, res, '没有找到这个分享'); return true; }
     if (p === '/gallery') { await galleryPage(req, res); return true; }
     if (p === '/trial') { await trialPage(req, res); return true; }
+    if (p === '/about') { await aboutPage(req, res); return true; }
   } catch (e) {
     console.error('[public error]', p, e);
     send(res, 500, '<p>页面暂时打不开，请稍后再试</p>');

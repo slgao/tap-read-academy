@@ -121,6 +121,7 @@ const users = {
   async setActive(id, on) { q('UPDATE users SET active=? WHERE id=?').run(on ? 1 : 0, num(id)); },
   async setRole(id, role) { q('UPDATE users SET role=? WHERE id=?').run(role, num(id)); },
   async rename(id, name) { q('UPDATE users SET name=? WHERE id=?').run(name, num(id)); },
+  async listByRole(role) { return q('SELECT * FROM users WHERE role=? ORDER BY id').all(role).map(toUser); },
   async remove(id) {
     q('DELETE FROM sessions WHERE user_id=?').run(num(id));
     q('DELETE FROM users WHERE id=?').run(num(id));
@@ -177,12 +178,14 @@ const classes = {
     const r = q('UPDATE classes SET teacher_id=? WHERE teacher_id=?').run(num(toTeacherId), num(fromTeacherId));
     return Number(r.changes || 0);
   },
-  /** 删班：成员、教材授权一起删；有作业的班由调用方拦住 */
+  /** 删班：成员、教材授权一起删；有作业或点过名的班由调用方拦住 */
   async remove(id) {
     q('DELETE FROM class_members WHERE class_id=?').run(num(id));
     q('DELETE FROM book_grants WHERE class_id=?').run(num(id));
+    q('UPDATE leaves SET class_id=NULL WHERE class_id=?').run(num(id));   // 请假记录留着，只是不再挂在这个班
     q('DELETE FROM classes WHERE id=?').run(num(id));
   },
+  async attendanceCount(classId) { return count('SELECT COUNT(*) n FROM attendance WHERE class_id=?', num(classId)); },
   async removeMember(classId, studentId) {
     q('DELETE FROM class_members WHERE class_id=? AND student_id=?').run(num(classId), num(studentId));
   },
@@ -497,6 +500,206 @@ const checkins = {
 
 
 /* ---------- 科目 ---------- */
+const toProfile = (r) => r && ({
+  userId: r.user_id, gender: r.gender || '', school: r.school || '', grade: r.grade || '',
+  parentName: r.parent_name || '', phone: r.phone || '', phone2: r.phone2 || '',
+  note: r.note || '', status: r.status || 'active', updatedAt: r.updated_at,
+});
+const toPackage = (r) => r && ({
+  id: r.id, studentId: r.student_id, subjectId: r.subject_id, courseId: r.course_id,
+  totalHours: r.total_hours, giftHours: r.gift_hours, usedHours: r.used_hours,
+  priceOriginal: r.price_original, pricePaid: r.price_paid,
+  purchasedAt: r.purchased_at, expiresAt: r.expires_at, pausedAt: r.paused_at,
+  status: r.status, note: r.note || '', createdAt: r.created_at,
+});
+const toHourLog = (r) => r && ({
+  id: r.id, packageId: r.package_id, studentId: r.student_id, hours: r.hours,
+  reason: r.reason, refId: r.ref_id, date: r.date, note: r.note || '', createdAt: r.created_at,
+});
+const toAttendance = (r) => r && ({
+  id: r.id, classId: r.class_id, studentId: r.student_id, date: r.date, status: r.status,
+  hours: r.hours, packageId: r.package_id, note: r.note || '', createdAt: r.created_at,
+});
+const toLeave = (r) => r && ({
+  id: r.id, studentId: r.student_id, classId: r.class_id, date: r.date, reason: r.reason || '',
+  status: r.status, createdAt: r.created_at, handledAt: r.handled_at,
+});
+
+/* ---------- 教务档案 ---------- */
+const profiles = {
+  async byUser(userId) { return toProfile(q('SELECT * FROM student_profiles WHERE user_id=?').get(num(userId))); },
+  async byUsers(ids) {
+    if (!ids.length) return new Map();
+    return mapBy(q(`SELECT * FROM student_profiles WHERE user_id IN (${marks(ids)})`).all(...ids.map(num)), 'user_id', toProfile);
+  },
+  async save(userId, p) {
+    q(`INSERT INTO student_profiles (user_id, gender, school, grade, parent_name, phone, phone2, note, status, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(user_id) DO UPDATE SET gender=excluded.gender, school=excluded.school, grade=excluded.grade,
+         parent_name=excluded.parent_name, phone=excluded.phone, phone2=excluded.phone2,
+         note=excluded.note, status=excluded.status, updated_at=excluded.updated_at`)
+      .run(num(userId), p.gender || '', p.school || '', p.grade || '', p.parentName || '',
+        p.phone || '', p.phone2 || '', p.note || '', p.status || 'active', now(), now());
+    return profiles.byUser(userId);
+  },
+};
+
+const packages = {
+  async byId(id) { return toPackage(q('SELECT * FROM packages WHERE id=?').get(num(id))); },
+  async byStudent(studentId) {
+    return q('SELECT * FROM packages WHERE student_id=? ORDER BY id DESC').all(num(studentId)).map(toPackage);
+  },
+  /** 多个学生的课包，用于名单上显示剩余课时 */
+  async byStudents(ids) {
+    if (!ids.length) return new Map();
+    const out = new Map();
+    for (const r of q(`SELECT * FROM packages WHERE student_id IN (${marks(ids)})`).all(...ids.map(num))) {
+      const list = out.get(r.student_id) || out.set(r.student_id, []).get(r.student_id);
+      list.push(toPackage(r));
+    }
+    return out;
+  },
+  /** 扣课时优先用：同科目 > 不限科目，先到期的先用 */
+  async pickForConsume(studentId, subjectId, date) {
+    const rows = q(`SELECT * FROM packages WHERE student_id=? AND status='active'
+                    AND total_hours + gift_hours - used_hours > 0
+                    AND (expires_at IS NULL OR expires_at='' OR expires_at >= ?)`).all(num(studentId), date).map(toPackage);
+    const same = rows.filter((p) => subjectId && p.subjectId === num(subjectId));
+    const pool = same.length ? same : rows.filter((p) => !p.subjectId);
+    const list = pool.length ? pool : rows;
+    return list.sort((a, b) => String(a.expiresAt || '9999').localeCompare(String(b.expiresAt || '9999')))[0] || null;
+  },
+  async create(x) {
+    const r = q(`INSERT INTO packages (student_id, subject_id, course_id, total_hours, gift_hours, used_hours,
+                   price_original, price_paid, purchased_at, expires_at, status, note, created_at)
+                 VALUES (?,?,?,?,?,0,?,?,?,?,'active',?,?)`)
+      .run(num(x.studentId), x.subjectId ? num(x.subjectId) : null, x.courseId ? num(x.courseId) : null,
+        Number(x.totalHours) || 0, Number(x.giftHours) || 0, num(x.priceOriginal) || 0, num(x.pricePaid) || 0,
+        x.purchasedAt || '', x.expiresAt || '', x.note || '', now());
+    return packages.byId(Number(r.lastInsertRowid));
+  },
+  async update(id, x) {
+    const cur = q('SELECT * FROM packages WHERE id=?').get(num(id));
+    if (!cur) return null;
+    q(`UPDATE packages SET total_hours=?, gift_hours=?, price_original=?, price_paid=?,
+         purchased_at=?, expires_at=?, paused_at=?, status=?, note=?, subject_id=? WHERE id=?`)
+      .run(x.totalHours == null ? cur.total_hours : Number(x.totalHours),
+        x.giftHours == null ? cur.gift_hours : Number(x.giftHours),
+        x.priceOriginal == null ? cur.price_original : num(x.priceOriginal),
+        x.pricePaid == null ? cur.price_paid : num(x.pricePaid),
+        x.purchasedAt == null ? cur.purchased_at : x.purchasedAt,
+        x.expiresAt == null ? cur.expires_at : x.expiresAt,
+        x.pausedAt === undefined ? cur.paused_at : x.pausedAt,
+        x.status || cur.status, x.note == null ? cur.note : x.note,
+        x.subjectId === undefined ? cur.subject_id : (x.subjectId ? num(x.subjectId) : null), num(id));
+    return packages.byId(id);
+  },
+  async addUsed(id, hours) { q('UPDATE packages SET used_hours = used_hours + ? WHERE id=?').run(Number(hours), num(id)); },
+  async remove(id) {
+    q('DELETE FROM hour_logs WHERE package_id=?').run(num(id));
+    q('DELETE FROM packages WHERE id=?').run(num(id));
+  },
+  async hasLogs(id) { return count('SELECT COUNT(*) n FROM hour_logs WHERE package_id=?', num(id)); },
+};
+
+const hourLogs = {
+  async add(x) {
+    const r = q(`INSERT INTO hour_logs (package_id, student_id, hours, reason, ref_id, date, note, created_by, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?)`)
+      .run(x.packageId ? num(x.packageId) : null, num(x.studentId), Number(x.hours), x.reason || 'adjust',
+        x.refId ? num(x.refId) : null, x.date || '', x.note || '', x.createdBy ? num(x.createdBy) : null, now());
+    return Number(r.lastInsertRowid);
+  },
+  async byStudent(studentId, limit = 50) {
+    return q(`SELECT * FROM hour_logs WHERE student_id=? ORDER BY id DESC LIMIT ${num(limit)}`)
+      .all(num(studentId)).map(toHourLog);
+  },
+};
+
+const attendance = {
+  async byId(id) { return toAttendance(q('SELECT * FROM attendance WHERE id=?').get(num(id))); },
+  async byClassDate(classId, date) {
+    return q('SELECT * FROM attendance WHERE class_id=? AND date=?').all(num(classId), date).map(toAttendance);
+  },
+  async byStudent(studentId, limit = 30) {
+    return q(`SELECT a.*, c.name AS class_name FROM attendance a LEFT JOIN classes c ON c.id=a.class_id
+              WHERE a.student_id=? ORDER BY a.date DESC, a.id DESC LIMIT ${num(limit)}`)
+      .all(num(studentId)).map((r) => ({ ...toAttendance(r), className: r.class_name || '' }));
+  },
+  async datesOfClass(classId, limit = 20) {
+    return q(`SELECT date, COUNT(*) n FROM attendance WHERE class_id=? GROUP BY date ORDER BY date DESC LIMIT ${num(limit)}`)
+      .all(num(classId));
+  },
+  async upsert(x) {
+    const cur = q('SELECT * FROM attendance WHERE class_id=? AND student_id=? AND date=?')
+      .get(num(x.classId), num(x.studentId), x.date);
+    if (cur) {
+      q('UPDATE attendance SET status=?, hours=?, package_id=?, note=?, created_by=?, created_at=? WHERE id=?')
+        .run(x.status, Number(x.hours) || 0, x.packageId ? num(x.packageId) : null, x.note || '',
+          x.createdBy ? num(x.createdBy) : null, now(), cur.id);
+      return attendance.byId(cur.id);
+    }
+    const r = q(`INSERT INTO attendance (class_id, student_id, date, status, hours, package_id, note, created_by, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?)`)
+      .run(num(x.classId), num(x.studentId), x.date, x.status, Number(x.hours) || 0,
+        x.packageId ? num(x.packageId) : null, x.note || '', x.createdBy ? num(x.createdBy) : null, now());
+    return attendance.byId(Number(r.lastInsertRowid));
+  },
+};
+
+const leaves = {
+  async byId(id) { return toLeave(q('SELECT * FROM leaves WHERE id=?').get(num(id))); },
+  async create(x) {
+    const r = q('INSERT INTO leaves (student_id, class_id, date, reason, status, created_at) VALUES (?,?,?,?,\'pending\',?)')
+      .run(num(x.studentId), x.classId ? num(x.classId) : null, x.date, x.reason || '', now());
+    return leaves.byId(Number(r.lastInsertRowid));
+  },
+  async byStudent(studentId, limit = 20) {
+    return q(`SELECT * FROM leaves WHERE student_id=? ORDER BY id DESC LIMIT ${num(limit)}`).all(num(studentId)).map(toLeave);
+  },
+  async approvedOn(classId, date) {
+    return q(`SELECT student_id FROM leaves WHERE date=? AND status='approved' AND (class_id=? OR class_id IS NULL)`)
+      .all(date, num(classId)).map((r) => r.student_id);
+  },
+  async list(status, studentIds, limit = 100) {
+    const where = [];
+    const args = [];
+    if (status) { where.push('l.status=?'); args.push(status); }
+    if (studentIds) {
+      if (!studentIds.length) return [];
+      where.push(`l.student_id IN (${marks(studentIds)})`);
+      args.push(...studentIds.map(num));
+    }
+    const sql = `SELECT l.*, u.name AS student_name, c.name AS class_name FROM leaves l
+                 JOIN users u ON u.id=l.student_id LEFT JOIN classes c ON c.id=l.class_id
+                 ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+                 ORDER BY l.id DESC LIMIT ${num(limit)}`;
+    return q(sql).all(...args).map((r) => ({ ...toLeave(r), studentName: r.student_name, className: r.class_name || '' }));
+  },
+  async setStatus(id, status, handledBy) {
+    q('UPDATE leaves SET status=?, handled_by=?, handled_at=? WHERE id=?').run(status, num(handledBy), now(), num(id));
+  },
+  async countPending(studentIds) {
+    if (studentIds && !studentIds.length) return 0;
+    return studentIds
+      ? count(`SELECT COUNT(*) n FROM leaves WHERE status='pending' AND student_id IN (${marks(studentIds)})`, ...studentIds.map(num))
+      : count(`SELECT COUNT(*) n FROM leaves WHERE status='pending'`);
+  },
+};
+
+const settings = {
+  async get(key, dflt = null) {
+    const r = q('SELECT value FROM settings WHERE key=?').get(key);
+    return r ? parseJSON(r.value, dflt) : dflt;
+  },
+  async set(key, value) {
+    q(`INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
+      .run(key, JSON.stringify(value), now());
+    return value;
+  },
+};
+
 const toReward = (r) => r && ({ id: r.id, name: r.name, stars: r.stars, imageId: r.image_id,
   note: r.note || '', sort: r.sort, active: !!r.active, createdAt: r.created_at });
 const toRedemption = (r) => r && ({ id: r.id, rewardId: r.reward_id, studentId: r.student_id,
@@ -701,6 +904,7 @@ const leads = {
 
 module.exports = {
   users, sessions, classes, books, lessons, pages, hotspots, assets, courses, rewards, redemptions,
+  profiles, packages, hourLogs, attendance, leaves, settings,
   homeworks, submissions, submissionItems, checkins,
   subjects, questions, answers, shares, leads,
 };

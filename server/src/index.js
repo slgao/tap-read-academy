@@ -89,7 +89,7 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
   if (p.startsWith('/api/')) return handleApi(req, res, p);
-  if (p === '/gallery' || p === '/trial' || p === '/s' || p.startsWith('/s/')) {
+  if (p === '/gallery' || p === '/trial' || p === '/about' || p === '/s' || p.startsWith('/s/')) {
     if (await handlePublic(req, res, url)) return;
   }
   if (p.startsWith('/files/')) return serveStatic(req, res, CONTENT_DIR, p.slice('/files/'.length));

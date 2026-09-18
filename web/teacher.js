@@ -15,6 +15,7 @@
     pencil: '<path d="M4 20l1.2-4.8L16 4.4a2 2 0 0 1 2.8 0l.8.8a2 2 0 0 1 0 2.8L8.8 18.8z"/><path d="M14 6.5l3.5 3.5"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
     phone: '<path d="M6.5 3.5h3l1.5 4.5-2 1.5a11 11 0 0 0 5.5 5.5l1.5-2 4.5 1.5v3a2 2 0 0 1-2 2A16 16 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/>',
+    folder: '<path d="M3 7.5a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   };
 
   function go(v, d) { Clip.stop(); player.stop(); S.view = v; Object.assign(S, d || {}); render(); }
@@ -25,7 +26,7 @@
     $view.className = V.noTab ? 'view no-tab' : 'view';
     $view.innerHTML = '<div class="empty">加载中…</div>';
     $tab.hidden = !V.tab;
-    const tabs = [['classes', '班级', TAB_IC.users], ['hwlist', '作业', TAB_IC.pencil]];
+    const tabs = [['classes', '班级', TAB_IC.users], ['students', '学员', TAB_IC.folder], ['hwlist', '作业', TAB_IC.pencil]];
     if (isAdmin()) tabs.push(['leads', '咨询', TAB_IC.phone]);      // 家长手机号只给负责人看
     tabs.push(['me', '我的', TAB_IC.user]);
     if (V.tab) $tab.innerHTML = tabs
@@ -116,7 +117,9 @@
           const ss = await API.get(`/api/classes/${c.id}/students`);
           cards.push(`<div class="card cls ${g.subject ? esc(g.subject.color) : ''}">
             <div class="row between"><div class="strong grow ellip">${esc(c.name)}</div>
-              <button class="btn sm grey" data-go="classform" data-arg='${JSON.stringify({ clsId: c.id })}'>管理</button></div>
+              <div class="row" style="gap:6px">
+                <button class="btn sm mint" data-go="roll" data-arg='${JSON.stringify({ clsId: c.id, rollDate: null })}'>点名</button>
+                <button class="btn sm grey" data-go="classform" data-arg='${JSON.stringify({ clsId: c.id })}'>管理</button></div></div>
             <div class="row mt" style="gap:6px;flex-wrap:wrap">${c.gradeBand ? `<span class="pill">${esc(c.gradeBand)}</span>` : ''}
               <span class="pill blue">邀请码 ${esc(c.inviteCode)}</span><span class="muted small">${ss.length} 名学生</span>
               ${isAdmin() && c.teacherName ? `<span class="muted small">· ${esc(c.teacherName)}</span>` : ''}</div>
@@ -404,6 +407,161 @@
       </details>`).join('')}`;
   }
 
+  /* ================= 教务档案 ================= */
+  const todayStr = () => new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const ST_NAME = { active: '在读', paused: '停课', left: '已结业' };
+  const ATT_NAME = { present: '到课', leave: '请假', absent: '旷课' };
+
+  /* ---------- 学员名单 ---------- */
+  const STUDENTS = {
+    top: () => `<h1><img src="brand/logo-96.png" alt="">学员</h1>${isAdmin() ? '<button class="btn sm" data-act="newStudent">+ 建档</button>' : ''}`, tab: true,
+    body: async () => {
+      const list = await API.get('/api/admin/students' + (S.stuQ ? '?q=' + encodeURIComponent(S.stuQ) : ''));
+      const low = list.filter((x) => x.status === 'active' && x.leftHours > 0 && x.leftHours <= 4);
+      return `<div class="card tight mb"><input id="stu-q" value="${esc(S.stuQ || '')}" placeholder="搜学员姓名" data-act="noop"></div>
+        ${low.length ? `<div class="card tight mb warnbox"><div class="strong">课时快用完了</div>
+          <div class="small mt">${low.map((x) => `${esc(x.name)} 剩 ${x.leftHours} 课时`).join('、')}</div></div>` : ''}
+        ${list.length ? list.map((x) => `<div class="card stu" data-go="student" data-arg='${JSON.stringify({ stuId: x.id })}'>
+          <div class="row between">
+            <div class="strong grow ellip">${esc(x.name)}
+              ${x.status === 'active' ? '' : `<span class="pill">${ST_NAME[x.status] || ''}</span>`}</div>
+            <span class="pill ${x.leftHours > 4 ? 'ok' : x.leftHours > 0 ? 'warn' : 'todo'}">剩 ${x.leftHours} 课时</span>
+          </div>
+          <div class="muted small mt">${[x.grade, x.school, x.classes.join('、')].filter(Boolean).map(esc).join(' · ') || '还没填档案'}</div>
+          ${x.expiresAt ? `<div class="muted small">到期 ${esc(x.expiresAt)}</div>` : ''}
+        </div>`).join('') : '<div class="empty">还没有学员<br><span class="small">点右上角「+ 建档」，或让学生用邀请码加入班级</span></div>'}`;
+    },
+    after: () => {
+      const q = document.getElementById('stu-q');
+      if (q) q.addEventListener('change', () => { S.stuQ = q.value.trim(); render(); });
+    },
+  };
+
+  /* ---------- 学员档案详情 ---------- */
+  const STUDENT = {
+    top: () => `<button class="back" data-go="students">‹</button><h1>学员档案</h1>`, noTab: true,
+    body: async () => {
+      const d = await API.get('/api/admin/students/' + S.stuId);
+      S.stu = d;
+      const admin = isAdmin();
+      const p = d.profile || {};
+      return `<div class="card">
+        <div class="row between"><div><div class="section-title">${esc(d.name)}</div>
+          <div class="muted small mt">${[p.gender, p.grade, p.school].filter(Boolean).map(esc).join(' · ') || '资料还没填'}</div></div>
+          <div class="right"><div class="bigscore">${d.hours.leftHours}<small> 课时</small></div>
+            ${d.hours.expiresAt ? `<div class="muted small">${esc(d.hours.expiresAt)} 到期</div>` : ''}</div></div>
+        <div class="hr"></div>
+        <div class="small">班级：${d.classes.map((c) => `${subjTag(c.subject)}${esc(c.name)}`).join(' ') || '还没进班'}</div>
+        ${admin ? `<div class="small mt">家长：${esc(p.parentName || '—')} ${p.phone ? `<a href="tel:${esc(p.phone)}">${esc(p.phone)}</a>` : ''}</div>
+        ${p.note ? `<div class="muted small mt">备注：${esc(p.note)}</div>` : ''}
+        <div class="row mt" style="gap:8px"><button class="btn sm ghost" data-act="editStudent">修改资料</button>
+          <span class="pill">${ST_NAME[p.status] || '在读'}</span></div>` : ''}
+      </div>
+
+      <div class="row between mb"><div class="section-title">课时包</div>
+        ${admin ? '<button class="btn sm" data-act="newPackage">+ 购买课包</button>' : ''}</div>
+      ${d.packages.length ? d.packages.map((k) => `<div class="card pkg ${k.status}">
+        <div class="row between"><div class="strong">${k.subject ? subjTag(k.subject) : ''}${k.sumHours} 课时
+          <span class="muted small">（购 ${k.totalHours} + 送 ${k.giftHours}）</span></div>
+          <span class="pill ${k.status === 'active' ? 'ok' : k.status === 'paused' ? 'warn' : ''}">${k.status === 'active' ? '在用' : k.status === 'paused' ? '停课中' : '已结束'}</span></div>
+        <div class="row between mt"><span class="muted small">已用 ${k.usedHours} · 剩 <b>${k.leftHours}</b></span>
+          <span class="muted small">${esc(k.purchasedAt || '')} → ${esc(k.expiresAt || '不限')}</span></div>
+        ${admin && (k.priceOriginal || k.pricePaid) ? `<div class="muted small mt">原价 ¥${k.priceOriginal} · 实收 <b>¥${k.pricePaid}</b></div>` : ''}
+        ${k.note ? `<div class="muted small">${esc(k.note)}</div>` : ''}
+        ${admin ? `<div class="row mt" style="gap:8px;flex-wrap:wrap">
+          <button class="btn sm ghost" data-act="adjustHours" data-id="${k.id}">加/减课时</button>
+          ${k.status === 'active' ? `<button class="btn sm grey" data-act="pausePkg" data-id="${k.id}">停课</button>` : ''}
+          ${k.status === 'paused' ? `<button class="btn sm mint" data-act="resumePkg" data-id="${k.id}">恢复上课</button>` : ''}
+          <button class="btn sm grey" data-act="editPkg" data-id="${k.id}" data-exp="${esc(k.expiresAt || '')}">改到期日</button>
+          ${k.status !== 'finished' ? `<button class="btn sm grey" data-act="finishPkg" data-id="${k.id}">结束</button>` : ''}
+        </div>` : ''}
+      </div>`).join('') : '<div class="card tight muted small mb">还没有课包</div>'}
+
+      <div class="section-title mb">最近上课</div>
+      ${d.attendance.length ? d.attendance.map((a) => `<div class="card tight">
+        <div class="row between"><span>${esc(a.date)} ${esc(a.className || '')}</span>
+          <span class="pill ${a.status === 'present' ? 'ok' : a.status === 'leave' ? 'warn' : 'todo'}">${ATT_NAME[a.status]}${a.hours ? ` −${a.hours}` : ''}</span></div>
+      </div>`).join('') : '<div class="card tight muted small">还没有上课记录</div>'}
+
+      ${admin && d.logs.length ? `<div class="section-title mb mt">课时流水</div>
+        <div class="card">${d.logs.map((l) => `<div class="row between logline">
+          <span class="muted small">${esc(l.date || '')} ${esc({ present: '上课', absent: '旷课', adjust: '手工调整', revert: '退回', leave: '请假' }[l.reason] || l.reason)}${l.note ? ' · ' + esc(l.note) : ''}</span>
+          <b class="${l.hours < 0 ? 'minus' : 'plus'}">${l.hours > 0 ? '+' : ''}${l.hours}</b></div>`).join('')}</div>` : ''}`;
+    },
+  };
+
+  /* ---------- 点名 ---------- */
+  const ROLL = {
+    top: () => `<button class="back" data-go="classes">‹</button><h1>点名</h1>`, noTab: true,
+    body: async () => {
+      const d = await API.get(`/api/classes/${S.clsId}/attendance?date=${S.rollDate || todayStr()}`);
+      S.roll = d;
+      return `<div class="card">
+        <div class="row between"><div class="strong grow ellip">${subjTag(d.subject)}${esc(d.className)}</div>
+          <input type="date" id="roll-date" value="${esc(d.date)}" data-act="noop" style="width:148px;flex:0 0 auto"></div>
+        <div class="row mt" style="gap:10px"><span class="muted small grow">本次每人扣</span>
+          <input id="roll-hours" type="number" min="0.5" max="10" step="0.5" value="${d.defaultHours || 1}" style="width:88px;text-align:center"> <span class="muted small">课时</span></div>
+      </div>
+      <div class="card tight mb"><div class="row" style="gap:8px">
+        <button class="btn sm mint grow" data-act="rollAll" data-st="present">全部到课</button>
+        <span class="muted small">请假不扣课时</span></div></div>
+      ${d.students.map((st) => `<div class="card tight roll" id="rl-${st.id}">
+        <div class="row between">
+          <div class="grow"><b>${esc(st.name)}</b>
+            <span class="muted small"> 剩 ${st.leftHours} 课时${st.approvedLeave ? ' · 已批准请假' : ''}</span></div>
+        </div>
+        <div class="row mt" style="gap:6px">
+          ${['present', 'leave', 'absent'].map((k) => `<button class="btn sm ${st.status === k ? (k === 'present' ? 'mint' : k === 'leave' ? 'star' : 'coral') : 'ghost'} grow"
+            data-act="rollPick" data-id="${st.id}" data-st="${k}">${ATT_NAME[k]}</button>`).join('')}
+        </div>
+      </div>`).join('') || '<div class="empty">这个班还没有学生</div>'}
+      ${d.students.length ? '<button class="btn block mt" data-act="saveRoll">保存点名并扣课时</button>' : ''}
+      ${d.dates.length ? `<div class="muted small center mt">最近点名：${d.dates.map((x) => esc(x.date)).join('、')}</div>` : ''}`;
+    },
+    after: () => {
+      const dt = document.getElementById('roll-date');
+      if (dt) dt.addEventListener('change', () => go('roll', { clsId: S.clsId, rollDate: dt.value }));
+    },
+  };
+
+  /* ---------- 请假审批 ---------- */
+  const LEAVES = {
+    top: () => `<button class="back" data-go="me">‹</button><h1>请假审批</h1>`, noTab: true,
+    body: async () => {
+      const d = await API.get('/api/admin/leaves');
+      const pend = d.list.filter((l) => l.status === 'pending');
+      const other = d.list.filter((l) => l.status !== 'pending').slice(0, 15);
+      return `${pend.length ? pend.map((l) => `<div class="card">
+          <div class="row between"><div><b>${esc(l.studentName)}</b> <span class="muted small">${esc(l.className || '')}</span></div>
+            <span class="pill warn">${esc(l.date)}</span></div>
+          ${l.reason ? `<div class="small mt">${esc(l.reason)}</div>` : ''}
+          <div class="row mt" style="gap:8px">
+            <button class="btn sm grow" data-act="leaveOk" data-id="${l.id}">准假（不扣课时）</button>
+            <button class="btn sm danger" data-act="leaveNo" data-id="${l.id}">不准</button>
+          </div></div>`).join('') : '<div class="card tight muted small mb">没有待审批的请假</div>'}
+        ${other.length ? `<div class="section-title mb mt">最近处理</div>${other.map((l) => `<div class="card tight">
+          <div class="row between"><span>${esc(l.studentName)} · ${esc(l.date)}</span>
+            <span class="pill ${l.status === 'approved' ? 'ok' : ''}">${l.status === 'approved' ? '已准假' : '未准'}</span></div></div>`).join('')}` : ''}`;
+    },
+  };
+
+  /* ---------- 学校简介 ---------- */
+  const ABOUT = {
+    top: () => `<button class="back" data-go="me">‹</button><h1>学校简介</h1>`, noTab: true,
+    body: async () => {
+      const a = await API.get('/api/about');
+      return `<div class="card">
+        <label class="field"><span>标题</span><input id="ab-title" value="${esc(a.title || '')}" placeholder="福斯特培训学校"></label>
+        <label class="field"><span>简介正文</span><textarea id="ab-text" rows="8" placeholder="办学理念、师资、课程、地址电话…">${esc(a.text || '')}</textarea></label>
+        <div class="field"><span>图片（最多 6 张，可传学校环境、师资海报）</span>
+          <div class="thumbs" id="ab-imgs">${(a.images || []).map((u) => `<button class="thumb" data-act="zoom" data-src="${esc(u)}"><img src="${esc(u)}" alt=""></button>`).join('')}
+            <label class="thumb add">加图片<input type="file" accept="image/*" id="ab-file" hidden></label></div></div>
+        <button class="btn block" data-act="saveAbout">保存</button>
+        <div class="row mt" style="gap:8px"><a class="btn sm ghost grow" href="/about" target="_blank">看看家长打开的样子</a></div>
+      </div>`;
+    },
+  };
+
   /* ---------- 星星奖品：学生用星星换礼物，老师在前台发放 ---------- */
   const REWARDS = {
     top: () => `<button class="back" data-go="me">‹</button><h1>星星奖品</h1>`, noTab: true,
@@ -509,6 +667,12 @@
         <a class="btn sm ghost" href="admin.html" target="_blank">打开内容后台</a></div></div>`
         : `<div class="card"><div class="section-title mb">我带的班</div>
         <div class="muted small">${st.classes} 个班。要加新班或改科目，在「班级」页操作；教材内容和家长咨询由负责人管理。</div></div>`}
+      <div class="card"><div class="row between mb"><div class="section-title">请假审批</div>
+          <button class="btn sm" data-go="leaves">查看</button></div>
+        <div class="muted small">家长在学生端提交请假，准假后点名时这一天不扣课时。</div></div>
+      ${admin ? `<div class="card"><div class="row between mb"><div class="section-title">学校简介</div>
+          <button class="btn sm" data-go="about">编辑</button></div>
+        <div class="muted small">编辑后生成一个公开页面，可以直接发给家长。</div></div>` : ''}
       <div class="card"><div class="row between mb"><div class="section-title">星星奖品</div>
           <button class="btn sm" data-go="rewards">${admin ? '管理' : '发放'}</button></div>
         <div class="muted small">学生攒够星星在手机上兑换，${admin ? '你在这里设置奖品，' : ''}孩子来前台领时点一下「已发放」。</div></div>
@@ -640,6 +804,42 @@
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
+  /** 点名按钮的选中样式 */
+  function paintRoll(id, status) {
+    const box = document.getElementById('rl-' + id);
+    if (!box) return;
+    [...box.querySelectorAll('[data-act="rollPick"]')].forEach((b) => {
+      const on = b.dataset.st === status;
+      b.className = `btn sm ${on ? (b.dataset.st === 'present' ? 'mint' : b.dataset.st === 'leave' ? 'star' : 'coral') : 'ghost'} grow`;
+    });
+  }
+
+  /** 日期加几个月，用来给课包的到期日一个默认值 */
+  function addMonths(dateStr, n) {
+    const d = new Date(dateStr || todayStr());
+    d.setMonth(d.getMonth() + n);
+    return d.toISOString().slice(0, 10);
+  }
+
+  /** 通用的单选弹窗 */
+  function pickList(title, list, onPick) {
+    const m = document.createElement('div');
+    m.className = 'poster-mask'; m.id = 'pickbox';
+    m.innerHTML = `<div class="poster-sheet" role="dialog" aria-label="${esc(title)}">
+        <div class="section-title">${esc(title)}</div>
+        <div class="picklist">${list.map((x, i) => `<button class="btn ghost block" data-pick="${i}">${esc(x.name)}</button>`).join('')}</div>
+        <button class="btn grey block" data-act="closePick">取消</button>
+      </div>`;
+    m.addEventListener('click', (e) => {
+      if (e.target === m) return m.remove();
+      const b = e.target.closest('[data-pick]');
+      if (!b) return;
+      m.remove();
+      onPick(list[Number(b.dataset.pick)]);
+    });
+    document.getElementById('app').appendChild(m);
+  }
+
   /** 选一位老师（转班时用） */
   function pickStaff(title, list, onPick) {
     const m = document.createElement('div');
@@ -677,7 +877,8 @@
     document.getElementById('app').appendChild(m);
   }
 
-  const VIEWS = { login: LOGIN, classes: CLASSES, classform: CLASSFORM, staff: STAFF, rewards: REWARDS, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
+  const VIEWS = { login: LOGIN, classes: CLASSES, classform: CLASSFORM, staff: STAFF, rewards: REWARDS,
+    students: STUDENTS, student: STUDENT, roll: ROLL, leaves: LEAVES, about: ABOUT, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
 
   /** 把页面上的评分栏读成一个对象；没打分就返回 null（后端会原样清空） */
   function readRubric(ri) {
@@ -908,6 +1109,119 @@
         toast(`批改完成：${fmtNum(res.score)} / ${fmtNum(res.maxScore)} 分`); render();
       } catch (e) { toast(e.message); el.disabled = false; }
     },
+    /* ---------- 教务档案 ---------- */
+    async newStudent() {
+      const name = (prompt('学员姓名') || '').trim();
+      if (!name) return;
+      try {
+        const st = await API.post('/api/admin/students', { name });
+        toast('已建档'); go('student', { stuId: st.id });
+      } catch (e) { toast(e.message, 2600); }
+    },
+    async editStudent() {
+      const p = (S.stu && S.stu.profile) || {};
+      const ask = (label, cur) => { const v = prompt(label, cur || ''); return v == null ? cur || '' : v.trim(); };
+      const body = {
+        gender: ask('性别（男 / 女，可留空）', p.gender),
+        grade: ask('年级', p.grade),
+        school: ask('就读学校', p.school),
+        parentName: ask('家长姓名', p.parentName),
+        phone: ask('家长手机号', p.phone),
+        note: ask('其他备注', p.note),
+        status: p.status || 'active',
+      };
+      try { await API.put('/api/admin/students/' + S.stuId, body); toast('已保存'); render(); }
+      catch (e) { toast(e.message, 2600); }
+    },
+    async newPackage() {
+      const subj = await API.get('/api/subjects');
+      pickList('这个课包属于哪个科目？', [{ id: 0, name: '不限科目' }, ...subj.subjects], async (x) => {
+        const total = Number(prompt('购买课时（不含赠送）', '40'));
+        if (!(total > 0)) return toast('课时数不对');
+        const gift = Number(prompt('赠送课时（没有就填 0）', '0')) || 0;
+        const priceOriginal = Number(prompt('原价（元）', '0')) || 0;
+        const pricePaid = Number(prompt('实收（元）', String(priceOriginal))) || 0;
+        const purchasedAt = (prompt('购买日期', todayStr()) || todayStr()).trim();
+        const expiresAt = (prompt('到期日期（可留空）', addMonths(purchasedAt, 12)) || '').trim();
+        const note = (prompt('备注（可留空）', '') || '').trim();
+        try {
+          await API.post('/api/admin/packages', { studentId: S.stuId, subjectId: x.id || null,
+            totalHours: total, giftHours: gift, priceOriginal, pricePaid, purchasedAt, expiresAt, note });
+          toast('课包已录入'); render();
+        } catch (e) { toast(e.message, 2600); }
+      });
+    },
+    async adjustHours(el) {
+      const h = Number(prompt('要加减多少课时？补课填正数，扣减填负数', '1'));
+      if (!h) return;
+      const note = (prompt('说明一下原因（家长能在流水里看到）', h > 0 ? '补课' : '扣减') || '').trim();
+      try { await API.post(`/api/admin/packages/${el.dataset.id}/adjust`, { hours: h, note }); toast('已调整'); render(); }
+      catch (e) { toast(e.message, 2600); }
+    },
+    async pausePkg(el) {
+      if (!confirm('暂停这个课包？停课期间不扣课时，恢复时到期日会按停的天数自动顺延。')) return;
+      try { await API.post(`/api/admin/packages/${el.dataset.id}/pause`); toast('已停课'); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async resumePkg(el) {
+      try { const r = await API.post(`/api/admin/packages/${el.dataset.id}/resume`); toast(`已恢复，到期日顺延到 ${r.expiresAt || '不限'}`, 2800); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async editPkg(el) {
+      const exp = (prompt('到期日期（YYYY-MM-DD，留空表示不限）', el.dataset.exp) || '').trim();
+      try { await API.put('/api/admin/packages/' + el.dataset.id, { expiresAt: exp }); toast('已保存'); render(); }
+      catch (e) { toast(e.message, 2600); }
+    },
+    async finishPkg(el) {
+      if (!confirm('把这个课包标记为已结束？剩余课时不再计入。')) return;
+      try { await API.put('/api/admin/packages/' + el.dataset.id, { status: 'finished' }); toast('已结束'); render(); }
+      catch (e) { toast(e.message); }
+    },
+    rollPick(el) {
+      const id = el.dataset.id;
+      S.roll.students.find((x) => String(x.id) === id).status = el.dataset.st;
+      paintRoll(id, el.dataset.st);
+    },
+    rollAll() {
+      // 只改按钮样式，不能重画整页：重画会重新取数据，把还没保存的点名结果冲掉
+      S.roll.students.forEach((st) => {
+        if (st.approvedLeave) return;            // 已准假的保持请假
+        st.status = 'present';
+        paintRoll(st.id, 'present');
+      });
+    },
+    async saveRoll(el) {
+      const records = S.roll.students.filter((x) => x.status).map((x) => ({ studentId: x.id, status: x.status }));
+      if (!records.length) return toast('还没点名');
+      el.disabled = true;
+      try {
+        const r = await API.post(`/api/classes/${S.clsId}/attendance`, {
+          date: document.getElementById('roll-date').value,
+          hours: Number(document.getElementById('roll-hours').value) || 1, records,
+        });
+        toast(`已点名 ${r.marked} 人，共扣 ${r.usedHours} 课时` + (r.noPackage.length ? `；${r.noPackage.join('、')} 没有课包` : ''), 3200);
+        render();
+      } catch (e) { toast(e.message, 2600); el.disabled = false; }
+    },
+    async leaveOk(el) {
+      try { await API.post(`/api/admin/leaves/${el.dataset.id}/approve`); toast('已准假'); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async leaveNo(el) {
+      try { await API.post(`/api/admin/leaves/${el.dataset.id}/reject`); toast('已标记为不准'); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async saveAbout(el) {
+      const f = document.getElementById('ab-file').files[0];
+      el.disabled = true;
+      try {
+        const body = { title: document.getElementById('ab-title').value.trim(), text: document.getElementById('ab-text').value };
+        if (f) body.images = [(await compressImage(f, 1400, 0.85)).base64];
+        await API.put('/api/admin/about', body);
+        toast('已保存'); render();
+      } catch (e) { toast(e.message, 2600); el.disabled = false; }
+    },
+
     async addReward(el) {
       const name = document.getElementById('rw-name').value.trim();
       const stars = Number(document.getElementById('rw-stars').value);
