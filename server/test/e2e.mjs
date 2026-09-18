@@ -36,8 +36,8 @@ const TAG = '__e2e_' + Date.now();
 
 (async () => {
   log('\n[1] 登录与身份');
-  const T = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: '王老师', teacherCode: process.env.TEACHER_CODE || '' });
-  check('老师登录', T.user.role === 'teacher', T.user.name);
+  const T = await call('POST', '/api/auth/login', { role: 'teacher', name: '王老师', teacherCode: process.env.TEACHER_CODE || '' });
+  check('负责人用主口令登录', T.user.role === 'admin', `${T.user.name} / ${T.user.role}`);
   const me = await call('GET', '/api/me', null, T.token);
   check('老师有班级', me.classes.length > 0, me.classes[0] && me.classes[0].name);
   const noAuth = await expectFail('GET', '/api/me');
@@ -162,11 +162,46 @@ const TAG = '__e2e_' + Date.now();
   const notImg = await expectFail('POST', '/api/posters', { imageBase64: Buffer.from('hello').toString('base64') }, S.token);
   check('非图片内容被拒绝', /JPG 或 PNG/.test(notImg || ''), notImg);
 
-  log('\n[6] 权限');
+  log('\n[6] 权限与账号');
+  const badPw = await expectFail('POST', '/api/auth/login', { role: 'teacher', name: '王老师', teacherCode: '000000wrong' });
+  check('口令错误不能登录', /口令/.test(badPw || ''), badPw);
+
+  // 负责人给老师建账号，老师用自己的口令登录
+  const staff = await call('POST', '/api/admin/teachers', { name: TAG + '赵老师' }, T.token);
+  check('建老师账号返回一次性口令', /^\d{6}$/.test(staff.code || ''), `${staff.name} ${String(staff.code).replace(/\d/g, '#')}`);
+  const other = await call('POST', '/api/auth/login', { role: 'teacher', name: staff.name, teacherCode: staff.code });
+  check('老师用自己的口令登录，身份是老师', other.user.role === 'teacher', other.user.role);
+  const wrongPw = await expectFail('POST', '/api/auth/login', { role: 'teacher', name: staff.name, teacherCode: '000000' });
+  check('别人猜错口令进不来', /口令/.test(wrongPw || ''), wrongPw);
   if (process.env.TEACHER_CODE) {
-    const bad = await expectFail('POST', '/api/auth/dev-login', { role: 'teacher', name: '王老师', teacherCode: 'wrong' });
-    check('口令错误不能登录老师', /口令/.test(bad || ''), bad);
+    const masterOnTeacher = await expectFail('POST', '/api/auth/login', { role: 'teacher', name: staff.name, teacherCode: process.env.TEACHER_CODE });
+    check('老师账号不能用负责人主口令登录', /负责人给你的口令/.test(masterOnTeacher || ''), masterOnTeacher);
   }
+  const leadPeek = await expectFail('GET', '/api/admin/leads', null, other.token);
+  check('老师看不到家长手机号', /无权限/.test(leadPeek || ''), leadPeek);
+  const staffPeek = await expectFail('GET', '/api/admin/teachers', null, other.token);
+  check('老师管不了账号', /无权限/.test(staffPeek || ''), staffPeek);
+  const bookPeek = await expectFail('POST', '/api/admin/books', { title: 'x' }, other.token);
+  check('老师改不了教材内容', /无权限/.test(bookPeek || ''), bookPeek);
+
+  // 负责人看得到别的老师的班
+  const zhSub = (await call('GET', '/api/subjects', null, T.token)).subjects.find((x) => x.code === 'zh');
+  const otherCls = await call('POST', '/api/classes', { subjectId: zhSub.id, gradeBand: '初中', name: TAG + ' 赵老师语文班' }, other.token);
+  const adminSees = (await call('GET', '/api/classes', null, T.token)).find((c) => c.id === otherCls.id);
+  check('负责人能看到全校的班，并知道是谁带的', !!adminSees && adminSees.teacherName === staff.name, adminSees && `${adminSees.name} / ${adminSees.teacherName}`);
+  const mineOnly = (await call('GET', '/api/classes', null, other.token)).length;
+  check('老师只看到自己的班', mineOnly === 1, `${mineOnly} 个班`);
+
+  // 停用后立刻登录不了
+  await call('PUT', `/api/admin/teachers/${staff.id}`, { active: false }, T.token);
+  const stopped = await expectFail('POST', '/api/auth/login', { role: 'teacher', name: staff.name, teacherCode: staff.code });
+  check('停用的账号登录不了', /停用/.test(stopped || ''), stopped);
+  const busy = await expectFail('DELETE', `/api/admin/teachers/${staff.id}`, null, T.token);
+  check('名下还有班的老师不能直接删', /还有班级/.test(busy || ''), busy);
+  await call('DELETE', `/api/classes/${otherCls.id}`, null, T.token);
+  await call('DELETE', `/api/admin/teachers/${staff.id}`, null, T.token);
+  check('班转走后可以删账号', !(await call('GET', '/api/admin/teachers', null, T.token)).some((u) => u.id === staff.id), '');
+
   const forbid = await expectFail('POST', '/api/admin/books', { title: 'x' }, S.token);
   check('学生不能建教材', /无权限/.test(forbid || ''), forbid);
 
@@ -209,17 +244,18 @@ const TAG = '__e2e_' + Date.now();
     && sView.subject.code === 'math' && !!sView.questions[4].stemImage, `${sView.subject.name} ${sView.questions.length} 题（科目跟班级走）`);
   const chg = await expectFail('PUT', `/api/classes/${mathCls.id}`, { subjectId: calli.id, gradeBand: '三四年级' }, T.token);
   check('布置过作业的班不能改科目', /不能再改科目/.test(chg || ''), chg);
-  const other = await call('POST', '/api/auth/dev-login', { role: 'teacher', name: TAG + '赵老师', teacherCode: process.env.TEACHER_CODE || '' });
-  const otherDel = await expectFail('DELETE', `/api/homeworks/${qhw.id}`, null, other.token);
+  const helper = await call('POST', '/api/admin/teachers', { name: TAG + '钱老师' }, T.token);
+  const helperLogin = await call('POST', '/api/auth/login', { role: 'teacher', name: helper.name, teacherCode: helper.code });
+  const otherDel = await expectFail('DELETE', `/api/homeworks/${qhw.id}`, null, helperLogin.token);
   check('别的老师不能删这个班的作业', /只能删除自己班/.test(otherDel || ''), otherDel);
-  const otherSee = await expectFail('GET', `/api/homeworks/${qhw.id}/submissions`, null, other.token);
+  const otherSee = await expectFail('GET', `/api/homeworks/${qhw.id}/submissions`, null, helperLogin.token);
   check('别的老师看不到这个班的批改页', /不是你带的班/.test(otherSee || ''), otherSee);
-  const otherGrade = await expectFail('POST', `/api/submissions/${1}/grade`, { scores: [] }, other.token);
+  const otherGrade = await expectFail('POST', `/api/submissions/${1}/grade`, { scores: [] }, helperLogin.token);
   check('别的老师不能打分', /不是你带的班|提交记录不存在/.test(otherGrade || ''), otherGrade);
-  const otherRoster = await expectFail('GET', `/api/classes/${mathCls.id}/students`, null, other.token);
+  const otherRoster = await expectFail('GET', `/api/classes/${mathCls.id}/students`, null, helperLogin.token);
   check('别的老师看不到这个班的名单', /别的班/.test(otherRoster || ''), otherRoster);
   const otherPost = await expectFail('POST', '/api/homeworks/questions', { classId: mathCls.id, title: TAG + ' 蹭班',
-    questions: [{ type: 'judge', score: 1, stem: 'x', answer: true }] }, other.token);
+    questions: [{ type: 'judge', score: 1, stem: 'x', answer: true }] }, helperLogin.token);
   check('别的老师不能给这个班布置作业', /自己带的班/.test(otherPost || ''), otherPost);
   const delHw = await expectFail('DELETE', `/api/classes/${mathCls.id}`, null, T.token);
   check('布置过作业的班不能删', /不能删除/.test(delHw || ''), delHw);
@@ -307,6 +343,7 @@ const TAG = '__e2e_' + Date.now();
   await call('POST', `/api/shares/${work.id}/revoke`, null, S.token);
   for (const id of [qhw.id, allAuto.id, chw.id]) await call('DELETE', `/api/homeworks/${id}`, null, T.token);
   for (const c of [mathCls, calliCls]) await call('DELETE', `/api/classes/${c.id}`, null, T.token);
+  await call('DELETE', `/api/admin/teachers/${helper.id}`, null, T.token);
   const afterDel = await call("GET", "/api/me", null, S.token);
   check('删班后学生不再在这些班里', !afterDel.classes.some((x) => [mathCls.id, calliCls.id].includes(x.id)), afterDel.classes.map((x) => x.name).join('、'));
 

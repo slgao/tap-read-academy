@@ -5,7 +5,7 @@
  */
 const repo = require('./repo');
 const store = require('./storage');
-const { ok, fail, readBody, rid, today, dayKey, inviteCode } = require('./util');
+const { ok, fail, readBody, rid, sha256, staffCode, today, dayKey, inviteCode } = require('./util');
 const grading = require('./grading');
 
 const CHECKIN_SECONDS = Number(process.env.CHECKIN_SECONDS) || 300;   // 当天学习满 5 分钟算打卡
@@ -81,35 +81,75 @@ const subjectView = (x) => x && { id: x.id, code: x.code, name: x.name, color: x
 
 const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, stars: u.stars, streak: u.streak, lastCheckin: u.lastCheckin });
 
+const ROLE_NAME = { admin: '负责人', teacher: '老师' };
+
 /* ---------- 路由表 ---------- */
 const routes = [];
 const on = (method, pattern, handler, opts = {}) =>
   routes.push({ method, parts: pattern.split('/').filter(Boolean), handler, auth: opts.auth !== false, roles: opts.roles });
 
-/* auth */
-on('POST', '/api/auth/dev-login', async (ctx) => {
+/* ================= 登录 =================
+ * 学生：姓名 + 班级邀请码。
+ * 老师：姓名 + 本人口令（口令由负责人在后台生成）。
+ * 负责人：姓名 + 主口令（部署时设的 TEACHER_CODE）。主口令只给负责人一个人，
+ *        第一次用它登录会建立负责人账号，之后由负责人给每位老师发各自的口令。
+ * 以前是所有老师共用一个口令，任何人输个新名字就能建老师账号，这里把它收掉了。
+ */
+const loginFails = new Map();                           // IP -> 最近的失败时间，防止有人慢慢猜口令
+// 口令是 6 位数字，挡住高频尝试就够了；老师自己输错几次不该被锁在门外
+const LOGIN_FAILS_PER_10MIN = Number(process.env.LOGIN_FAILS_PER_10MIN) || 20;
+
+function loginBlocked(ip) {
+  const nowMs = Date.now();
+  for (const [k, v] of loginFails) if (!v.some((t) => nowMs - t < 600e3)) loginFails.delete(k);
+  return (loginFails.get(ip) || []).filter((t) => nowMs - t < 600e3).length >= LOGIN_FAILS_PER_10MIN;
+}
+function noteLoginFail(ip) {
+  const list = (loginFails.get(ip) || []).filter((t) => Date.now() - t < 600e3);
+  list.push(Date.now());
+  loginFails.set(ip, list);
+}
+
+async function login(ctx) {
   const { role = 'student', name, inviteCode: code } = ctx.body;
   if (!name || !String(name).trim()) return fail(ctx.res, 1001, '请填写姓名');
-  const r = ['student', 'teacher', 'admin'].includes(role) ? role : 'student';
-  // 设置了 TEACHER_CODE 时，老师和管理员登录必须带口令 —— 否则公网上任何人输入老师姓名就能进后台
-  const need = process.env.TEACHER_CODE;
-  if (need && r !== 'student' && String(ctx.body.teacherCode || '') !== need) {
-    return fail(ctx.res, 2001, '老师口令不正确');
-  }
-  const nm = String(name).trim();
+  const nm = String(name).trim().slice(0, 20);
+  const ip = String(ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '').split(',')[0].trim();
 
-  let user = await repo.users.byNameRole(nm, r);
-  if (!user) user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: r, name: nm });
-
-  if (code) {
-    const cls = await repo.classes.byInviteCode(String(code).toUpperCase().trim());
-    if (!cls) return fail(ctx.res, 3001, '班级邀请码不存在');
-    if (r === 'student') await repo.classes.addMember(cls.id, user.id);
+  let user;
+  if (role === 'student') {
+    user = await repo.users.byNameRole(nm, 'student');
+    if (!user) user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'student', name: nm });
+    if (code) {
+      const cls = await repo.classes.byInviteCode(String(code).toUpperCase().trim());
+      if (!cls) return fail(ctx.res, 3001, '班级邀请码不存在');
+      await repo.classes.addMember(cls.id, user.id);
+    }
+  } else {
+    if (loginBlocked(ip)) return fail(ctx.res, 429, '尝试太多次了，请过十分钟再试');
+    const given = String(ctx.body.teacherCode || '').trim();
+    if (!given) return fail(ctx.res, 1001, '请输入口令');
+    const master = process.env.TEACHER_CODE;
+    user = await repo.users.staffByName(nm);
+    if (master && given === master) {
+      // 主口令：负责人入口，账号不存在就建一个
+      if (!user) user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'admin', name: nm });
+      else if (user.role !== 'admin') { noteLoginFail(ip); return fail(ctx.res, 2001, '这是老师账号，请用负责人给你的口令登录'); }
+    } else {
+      if (!user || !user.loginCode || sha256(given) !== user.loginCode) {
+        noteLoginFail(ip);
+        return fail(ctx.res, 2001, '姓名或口令不对');
+      }
+      if (!user.active) return fail(ctx.res, 2001, '这个账号已经停用，请找负责人');
+    }
   }
   const token = rid() + rid();
   await repo.sessions.create(token, user.id);
   ok(ctx.res, { token, user: publicUser(user) });
-}, { auth: false });
+}
+
+on('POST', '/api/auth/login', login, { auth: false });
+on('POST', '/api/auth/dev-login', login, { auth: false });      // 旧地址，小程序端还在用
 
 on('GET', '/api/me', async (ctx) => {
   const ids = await repo.classes.idsForUser(ctx.user);
@@ -144,7 +184,10 @@ on('GET', '/api/classes', async (ctx) => {
   const rows = [];
   for (const id of ids) {
     const c = byId.get(id);
-    if (c) rows.push({ id: c.id, name: c.name, inviteCode: c.inviteCode, teacherId: c.teacherId,
+    if (!c) continue;
+    const t = ctx.user.role === 'admin' ? await repo.users.byId(c.teacherId) : null;
+    rows.push({ id: c.id, name: c.name, inviteCode: c.inviteCode, teacherId: c.teacherId,
+      teacherName: t ? t.name : (c.teacherId === ctx.user.id ? ctx.user.name : ''),
       subject: subjectView(subs.find((x) => x.id === c.subjectId)), gradeBand: c.gradeBand, studentCount: counts.get(c.id) || 0 });
   }
   // 按科目、年级段排好，界面直接分组显示
@@ -585,7 +628,7 @@ on('POST', '/api/admin/books', async (ctx) => {
   const book = await repo.books.create({ title: String(title), subtitle, grade });
   for (const c of await repo.classes.all()) await repo.books.grantToClass(book.id, c.id);
   ok(ctx.res, { id: book.id });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('POST', '/api/admin/lessons', async (ctx) => {
   const { bookId, title } = ctx.body;
@@ -593,7 +636,7 @@ on('POST', '/api/admin/lessons', async (ctx) => {
   const sort = (await repo.lessons.countByBook(bookId)) + 1;
   const lesson = await repo.lessons.create({ bookId, title: String(title), sort });
   ok(ctx.res, { id: lesson.id });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('POST', '/api/admin/lessons/:id/audio', async (ctx) => {
   const lesson = await repo.lessons.byId(ctx.params.id);
@@ -602,7 +645,7 @@ on('POST', '/api/admin/lessons/:id/audio', async (ctx) => {
     { mime: ctx.body.mime || 'audio/mpeg' });
   await repo.lessons.setAudio(lesson.id, asset.id);
   ok(ctx.res, { asset: await assetView(asset.id) });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('POST', '/api/admin/pages', async (ctx) => {
   const { lessonId, pageNo } = ctx.body;
@@ -614,7 +657,7 @@ on('POST', '/api/admin/pages', async (ctx) => {
     lessonId, pageNo: Number(pageNo) || sort, imgId: asset.id, imgW: w, imgH: h, sort,
   });
   ok(ctx.res, { id: page.id, imgW: w, imgH: h, img: await assetView(asset.id) });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('PUT', '/api/admin/pages/:id/hotspots', async (ctx) => {
   const page = await repo.pages.byId(ctx.params.id);
@@ -623,7 +666,7 @@ on('PUT', '/api/admin/pages/:id/hotspots', async (ctx) => {
   const list = Array.isArray(ctx.body.hotspots) ? ctx.body.hotspots : [];
   const count = await repo.hotspots.replaceForPage(page.id, list, lesson ? lesson.audioId : null);
   ok(ctx.res, { count });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('DELETE', '/api/admin/pages/:id', async (ctx) => {
   if (await repo.homeworks.countByPage(ctx.params.id)) {
@@ -631,7 +674,7 @@ on('DELETE', '/api/admin/pages/:id', async (ctx) => {
   }
   await repo.pages.remove(ctx.params.id);
   ok(ctx.res, { ok: true });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('DELETE', '/api/admin/lessons/:id', async (ctx) => {
   const lesson = await repo.lessons.byId(ctx.params.id);
@@ -641,7 +684,7 @@ on('DELETE', '/api/admin/lessons/:id', async (ctx) => {
   }
   await repo.lessons.remove(lesson.id);
   ok(ctx.res, { ok: true });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('DELETE', '/api/admin/books/:id', async (ctx) => {
   const book = await repo.books.byId(ctx.params.id);
@@ -651,18 +694,83 @@ on('DELETE', '/api/admin/books/:id', async (ctx) => {
   }
   await repo.books.remove(book.id);
   ok(ctx.res, { ok: true });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('GET', '/api/admin/stats', async (ctx) => {
-  ok(ctx.res, {
-    books: await repo.books.count(),
-    pages: await repo.pages.count(),
-    hotspots: await repo.hotspots.count(),
-    students: await repo.users.countByRole('student'),
-    homeworks: await repo.homeworks.count(),
-    submissions: await repo.submissions.count(),
-  });
+  const base = { books: await repo.books.count(), pages: await repo.pages.count(), hotspots: await repo.hotspots.count() };
+  if (ctx.user.role === 'admin') {
+    return ok(ctx.res, { ...base, scope: 'school',
+      students: await repo.users.countByRole('student'),
+      homeworks: await repo.homeworks.count(),
+      submissions: await repo.submissions.count(),
+      teachers: (await repo.users.staff()).length });
+  }
+  // 老师只看自己带的班的数字
+  const ids = await repo.classes.idsForUser(ctx.user);
+  const counts = await repo.classes.memberCounts(ids);
+  const hws = await repo.homeworks.byClassIds(ids, 500);
+  const stats = await repo.submissions.statsByHomeworks(hws.map((h) => h.id));
+  ok(ctx.res, { ...base, scope: 'mine',
+    students: [...counts.values()].reduce((a, b) => a + b, 0),
+    homeworks: hws.length,
+    submissions: [...stats.values()].reduce((a, b) => a + b.submitted, 0),
+    classes: ids.length });
 }, { roles: ['teacher', 'admin'] });
+
+/* ================= 教职工账号（负责人管理） ================= */
+on('GET', '/api/admin/teachers', async (ctx) => {
+  const out = [];
+  for (const u of await repo.users.staff()) {
+    out.push({ id: u.id, name: u.name, role: u.role, roleName: ROLE_NAME[u.role] || u.role,
+      active: !!u.active, hasCode: !!u.loginCode, isMe: u.id === ctx.user.id,
+      classCount: await repo.classes.countByTeacher(u.id), createdAt: u.createdAt });
+  }
+  ok(ctx.res, out);
+}, { roles: ['admin'] });
+
+/** 建老师账号，返回一次性口令：负责人把它发给这位老师 */
+on('POST', '/api/admin/teachers', async (ctx) => {
+  const name = String(ctx.body.name || '').trim().slice(0, 20);
+  if (!name) return fail(ctx.res, 1001, '请填写老师姓名');
+  if (await repo.users.staffByName(name)) return fail(ctx.res, 3013, '已经有同名的老师，换个写法（比如加上科目）');
+  const code = staffCode();
+  const user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'teacher', name });
+  await repo.users.setLoginCode(user.id, sha256(code));
+  ok(ctx.res, { id: user.id, name, code });
+}, { roles: ['admin'] });
+
+/** 重置口令：老师忘了口令时用，旧口令立刻失效 */
+on('POST', '/api/admin/teachers/:id/code', async (ctx) => {
+  const u = await repo.users.byId(ctx.params.id);
+  if (!u || u.role === 'student') return fail(ctx.res, 3013, '账号不存在');
+  const code = staffCode();
+  await repo.users.setLoginCode(u.id, sha256(code));
+  ok(ctx.res, { id: u.id, name: u.name, code });
+}, { roles: ['admin'] });
+
+on('PUT', '/api/admin/teachers/:id', async (ctx) => {
+  const u = await repo.users.byId(ctx.params.id);
+  if (!u || u.role === 'student') return fail(ctx.res, 3013, '账号不存在');
+  if (u.id === ctx.user.id && ctx.body.active === false) return fail(ctx.res, 1001, '不能停用自己');
+  if (ctx.body.name != null) {
+    const name = String(ctx.body.name).trim().slice(0, 20);
+    const other = await repo.users.staffByName(name);
+    if (!name) return fail(ctx.res, 1001, '姓名不能为空');
+    if (other && other.id !== u.id) return fail(ctx.res, 3013, '已经有同名的老师');
+    await repo.users.rename(u.id, name);
+  }
+  if (ctx.body.active != null) await repo.users.setActive(u.id, !!ctx.body.active);
+  ok(ctx.res, { ok: true });
+}, { roles: ['admin'] });
+
+on('DELETE', '/api/admin/teachers/:id', async (ctx) => {
+  const u = await repo.users.byId(ctx.params.id);
+  if (!u || u.role === 'student') return fail(ctx.res, 3013, '账号不存在');
+  if (u.id === ctx.user.id) return fail(ctx.res, 1001, '不能删自己');
+  if (await repo.classes.countByTeacher(u.id)) return fail(ctx.res, 3013, '这位老师名下还有班级，先把班转走或删掉');
+  await repo.users.remove(u.id);
+  ok(ctx.res, { ok: true });
+}, { roles: ['admin'] });
 
 
 /* ================= 多科目：科目 ================= */
@@ -948,26 +1056,26 @@ on('GET', '/api/admin/leads', async (ctx) => {
   const subs = await repo.subjects.all();
   const list = await repo.leads.list();
   ok(ctx.res, list.map((l) => ({ ...l, subjectNames: l.subjects.map((c) => (subs.find((x) => x.code === c) || {}).name).filter(Boolean) })));
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('PUT', '/api/admin/leads/:id', async (ctx) => {
   const status = ctx.body.status;
   if (status && !['new', 'contacted', 'enrolled', 'invalid'].includes(status)) return fail(ctx.res, 1001, '状态不对');
   await repo.leads.update(ctx.params.id, { status, note: ctx.body.note });
   ok(ctx.res, { ok: true });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('DELETE', '/api/admin/leads/:id', async (ctx) => {
   await repo.leads.remove(ctx.params.id);
   ok(ctx.res, { ok: true });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 on('GET', '/api/admin/promo-stats', async (ctx) => {
   const since = new Date(Date.now() - 7 * 86400e3).toISOString().replace('T', ' ').slice(0, 19);
   const s = await repo.shares.stats(since);
   ok(ctx.res, { last7: { shares: s.recentShares, views: s.recentViews, leads: await repo.leads.countSince(since) },
     activeShares: s.activeShares, newLeads: await repo.leads.countNew(), top: s.top });
-}, { roles: ['teacher', 'admin'] });
+}, { roles: ['admin'] });
 
 /* ---------- 分发 ---------- */
 function match(method, parts) {

@@ -517,3 +517,4 @@ div.field > span{display:block;font-size:13px;font-weight:700;color:var(--text-2
 .card.cls.sky{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--sky)} .card.cls.coral{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--coral)}
 .card.cls.mint{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--mint)} .card.cls.star{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--star)}
 .class-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
+.bigcode{font:800 44px/1.2 var(--sans);letter-spacing:.18em;color:var(--ink-deep);margin:10px 0 8px}

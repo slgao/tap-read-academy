@@ -38,6 +38,9 @@ function readBody(req, limitBytes = 48 * 1024 * 1024) {
 }
 
 const rid = () => crypto.randomBytes(16).toString('hex');
+const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+/** 老师登录口令：6 位数字，好念也好在手机上输 */
+const staffCode = () => String(crypto.randomInt(100000, 1000000));
 // 一天按北京时间算：机构和学生都在国内。用固定 +8 而不是服务器本地时区，
 // 服务器在日本，学生手机时区也可能不对，固定下来两边才对得上。
 const CN_OFFSET_MS = 8 * 3600 * 1000;
@@ -52,4 +55,4 @@ function inviteCode() {
   return s;
 }
 
-module.exports = { json, ok, fail, readBody, rid, today, dayKey, now, inviteCode };
+module.exports = { json, ok, fail, readBody, rid, sha256, staffCode, today, dayKey, now, inviteCode };

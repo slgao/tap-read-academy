@@ -6,6 +6,8 @@
   const $top = document.getElementById('topbar');
   const $tab = document.getElementById('tabbar');
   const player = new Player();
+  const isAdmin = () => ((Store.user || {}).role === 'admin');
+
   const S = { view: 'classes', pick: { bookId: null, pageId: null, sel: [] }, newKind: 'questions', qs: [] };
 
   const TAB_IC = {
@@ -23,7 +25,10 @@
     $view.className = V.noTab ? 'view no-tab' : 'view';
     $view.innerHTML = '<div class="empty">加载中…</div>';
     $tab.hidden = !V.tab;
-    if (V.tab) $tab.innerHTML = [['classes', '班级', TAB_IC.users], ['hwlist', '作业', TAB_IC.pencil], ['leads', '咨询', TAB_IC.phone], ['me', '我的', TAB_IC.user]]
+    const tabs = [['classes', '班级', TAB_IC.users], ['hwlist', '作业', TAB_IC.pencil]];
+    if (isAdmin()) tabs.push(['leads', '咨询', TAB_IC.phone]);      // 家长手机号只给负责人看
+    tabs.push(['me', '我的', TAB_IC.user]);
+    if (V.tab) $tab.innerHTML = tabs
       .map(([k, t, icon]) => `<button class="${S.view === k ? 'on' : ''}" data-go="${k}" aria-label="${t}"><span class="tab-ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></span>${t}</button>`).join('');
     return Promise.resolve(V.body()).then((h) => { $view.innerHTML = h; if (V.after) V.after(); })
       .catch((e) => { $view.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
@@ -79,10 +84,10 @@
         <div class="tag">布置作业 · 批改跟读 · 查看班级</div>
       </div>
       <div class="card">
-        <label class="field"><span>姓名</span><input id="i-name" value="王老师"></label>
-        <label class="field"><span>老师口令</span><input id="i-tcode" type="password" placeholder="本地开发可不填"></label>
+        <label class="field"><span>姓名</span><input id="i-name" placeholder="例如：李老师"></label>
+        <label class="field"><span>口令</span><input id="i-tcode" type="password" inputmode="numeric" placeholder="6 位数字" autocomplete="off"></label>
         <button class="btn block" data-act="login">进入老师端</button>
-        <div class="muted small mt center">演示账号：王老师（已有「六年级 A 班」）</div>
+        <div class="muted small mt center">口令找负责人要；负责人用自己的主口令登录</div>
       </div>`,
   };
 
@@ -108,7 +113,8 @@
             <div class="row between"><div class="strong grow ellip">${esc(c.name)}</div>
               <button class="btn sm grey" data-go="classform" data-arg='${JSON.stringify({ clsId: c.id })}'>管理</button></div>
             <div class="row mt" style="gap:6px;flex-wrap:wrap">${c.gradeBand ? `<span class="pill">${esc(c.gradeBand)}</span>` : ''}
-              <span class="pill blue">邀请码 ${esc(c.inviteCode)}</span><span class="muted small">${ss.length} 名学生</span></div>
+              <span class="pill blue">邀请码 ${esc(c.inviteCode)}</span><span class="muted small">${ss.length} 名学生</span>
+              ${isAdmin() && c.teacherName ? `<span class="muted small">· ${esc(c.teacherName)}</span>` : ''}</div>
             ${ss.length ? `<div class="hr"></div>${ss.map((st, i) => `<div class="row between" style="padding:5px 0">
               <span><i class="rank ${i < 3 ? 'top' : ''}">${i + 1}</i>${esc(st.name)}</span>
               <span class="muted small">${st.stars} 星 · 连续 ${st.streak} 天</span></div>`).join('')}`
@@ -393,17 +399,67 @@
     top: () => `<h1><img src="brand/logo-96.png" alt="">我的</h1>`, tab: true,
     body: async () => {
       const st = await API.get('/api/admin/stats');
-      return `<div class="hero"><h2>${esc((Store.user || {}).name || '')}</h2><div class="small">福斯特培训学校 · 老师</div>
-        <div class="stats"><div><b>${st.students}</b><span>学生</span></div><div><b>${st.homeworks}</b><span>作业</span></div>
+      const admin = isAdmin();
+      const scope = admin ? '全校' : '我的班';
+      return `<div class="hero"><h2>${esc((Store.user || {}).name || '')}</h2>
+        <div class="small">福斯特培训学校 · ${admin ? '负责人' : '老师'}</div>
+        <div class="stats"><div><b>${st.students}</b><span>${scope}学生</span></div><div><b>${st.homeworks}</b><span>作业</span></div>
         <div><b>${st.submissions}</b><span>提交</span></div></div></div>
+      ${admin ? `<div class="card"><div class="row between mb"><div class="section-title">老师账号</div>
+          <button class="btn sm" data-go="staff">管理</button></div>
+        <div class="muted small">${st.teachers} 个教职工账号。每位老师用自己的口令登录，只能看到自己带的班。</div></div>
       <div class="card"><div class="section-title mb">教材内容</div>
         <div class="row between"><span class="muted small">教材 ${st.books} 本 · 页面 ${st.pages} 页 · 热区 ${st.hotspots} 个</span>
-        <a class="btn sm ghost" href="admin.html" target="_blank">打开内容后台</a></div></div>
+        <a class="btn sm ghost" href="admin.html" target="_blank">打开内容后台</a></div></div>`
+        : `<div class="card"><div class="section-title mb">我带的班</div>
+        <div class="muted small">${st.classes} 个班。要加新班或改科目，在「班级」页操作；教材内容和家长咨询由负责人管理。</div></div>`}
       <div class="card"><div class="row between"><span>切换账号</span><button class="btn sm grey" data-act="logout">退出登录</button></div></div>`;
     },
   };
 
-  const VIEWS = { login: LOGIN, classes: CLASSES, classform: CLASSFORM, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
+  /* ---------- 教职工账号（只有负责人能进） ---------- */
+  const STAFF = {
+    top: () => `<button class="back" data-go="me">‹</button><h1>老师账号</h1><button class="btn sm" data-act="newStaff">+ 新建</button>`, noTab: true,
+    body: async () => {
+      const list = await API.get('/api/admin/teachers');
+      return `<div class="card tight mb"><div class="muted small">
+          每位老师用「姓名 + 自己的口令」登录，只能看到自己带的班和作业；家长预约、教材内容只有负责人能看。
+          老师忘了口令就点「重置口令」，系统会生成一个新的，旧的立刻失效。</div></div>
+        ${list.map((u) => `<div class="card">
+          <div class="row between">
+            <div class="strong grow ellip">${esc(u.name)}
+              <span class="pill ${u.role === 'admin' ? 'warn' : 'blue'}">${esc(u.roleName)}</span>
+              ${u.active ? '' : '<span class="pill todo">已停用</span>'}</div>
+          </div>
+          <div class="muted small mt">${u.classCount} 个班${u.role === 'admin' || u.hasCode ? '' : ' · 还没有口令，先点「重置口令」'}${u.isMe ? ' · 当前登录' : ''}</div>
+          ${u.role === 'admin' && u.isMe ? '<div class="muted small mt">负责人用部署时设置的主口令登录</div>' : `
+          <div class="row mt" style="gap:8px;flex-wrap:wrap">
+            <button class="btn sm ghost" data-act="resetCode" data-id="${u.id}" data-name="${esc(u.name)}">重置口令</button>
+            <button class="btn sm grey" data-act="toggleStaff" data-id="${u.id}" data-on="${u.active ? 1 : 0}">${u.active ? '停用' : '恢复'}</button>
+            ${u.classCount ? '' : `<button class="btn sm danger" data-act="delStaff" data-id="${u.id}" data-name="${esc(u.name)}">删除</button>`}
+          </div>`}
+        </div>`).join('')}`;
+    },
+  };
+
+  /** 新口令只显示这一次，让负责人抄下来发给老师 */
+  function showCode(name, code) {
+    const m = document.createElement('div');
+    m.className = 'poster-mask'; m.id = 'codebox';
+    m.innerHTML = `<div class="poster-sheet" role="dialog" aria-label="老师口令">
+        <div class="center"><div class="section-title">${esc(name)} 的口令</div>
+          <div class="bigcode">${esc(code)}</div>
+          <div class="muted small">把这 6 位数字发给${esc(name)}，登录时输姓名和它。<br>这个口令只显示这一次，忘了可以重置。</div></div>
+        <div class="row" style="gap:10px">
+          <button class="btn ghost grow" data-act="copyCode" data-code="${esc(code)}">复制</button>
+          <button class="btn grow" data-act="closeCode">知道了</button>
+        </div>
+      </div>`;
+    m.addEventListener('click', (e) => { if (e.target === m) m.remove(); });
+    document.getElementById('app').appendChild(m);
+  }
+
+  const VIEWS = { login: LOGIN, classes: CLASSES, classform: CLASSFORM, staff: STAFF, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
 
   const ACT = {
     async login() {
@@ -413,6 +469,34 @@
       catch (e) { toast(e.message); }
     },
     logout() { Store.clear(); go('login'); },
+    async newStaff() {
+      const name = (prompt('老师姓名（学生和家长会看到，建议写「李老师」这样）') || '').trim();
+      if (!name) return;
+      try { const r = await API.post('/api/admin/teachers', { name }); render(); showCode(r.name, r.code); }
+      catch (e) { toast(e.message, 2600); }
+    },
+    async resetCode(el) {
+      if (!confirm(`给 ${el.dataset.name} 换一个新口令？旧口令马上失效。`)) return;
+      try { const r = await API.post(`/api/admin/teachers/${el.dataset.id}/code`); showCode(r.name, r.code); }
+      catch (e) { toast(e.message); }
+    },
+    async toggleStaff(el) {
+      const on = el.dataset.on === '1';
+      if (on && !confirm('停用后这位老师就登录不了了，确定？')) return;
+      try { await API.put(`/api/admin/teachers/${el.dataset.id}`, { active: !on }); toast(on ? '已停用' : '已恢复'); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async delStaff(el) {
+      if (!confirm(`删除 ${el.dataset.name} 的账号？`)) return;
+      try { await API.del('/api/admin/teachers/' + el.dataset.id); toast('已删除'); render(); }
+      catch (e) { toast(e.message, 2600); }
+    },
+    copyCode(el) {
+      const code = el.dataset.code;
+      if (navigator.clipboard) navigator.clipboard.writeText(code).then(() => toast('口令已复制')).catch(() => toast('复制不了，请手抄：' + code, 3000));
+      else toast('请手抄：' + code, 3000);
+    },
+    closeCode() { const m = document.getElementById('codebox'); if (m) m.remove(); },
     async saveClass(el) {
       const sub = document.querySelector('input[name="c-subj"]:checked');
       const band = document.querySelector('input[name="c-band"]:checked');

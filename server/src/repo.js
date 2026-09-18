@@ -37,6 +37,7 @@ const mapBy = (rows, key, val) => {
 const toUser = (r) => r && ({
   id: r.id, openid: r.openid, role: r.role, name: r.name, avatar: r.avatar,
   stars: r.stars, streak: r.streak, lastCheckin: r.last_checkin, createdAt: r.created_at,
+  loginCode: r.login_code, active: r.active == null ? 1 : r.active,
 });
 const toClass = (r) => r && ({
   id: r.id, name: r.name, inviteCode: r.invite_code, teacherId: r.teacher_id, createdAt: r.created_at,
@@ -107,6 +108,20 @@ const count = (sql, ...args) => q(sql).get(...args).n;
 const users = {
   async byId(id) { return toUser(q('SELECT * FROM users WHERE id=?').get(num(id))); },
   async byNameRole(name, role) { return toUser(q('SELECT * FROM users WHERE name=? AND role=?').get(name, role)); },
+  /** 按姓名找教职工（老师或负责人） */
+  async staffByName(name) {
+    return toUser(q("SELECT * FROM users WHERE name=? AND role IN ('teacher','admin') ORDER BY id LIMIT 1").get(name));
+  },
+  async staff() {
+    return q("SELECT * FROM users WHERE role IN ('teacher','admin') ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, id").all().map(toUser);
+  },
+  async setLoginCode(id, hash) { q('UPDATE users SET login_code=? WHERE id=?').run(hash, num(id)); },
+  async setActive(id, on) { q('UPDATE users SET active=? WHERE id=?').run(on ? 1 : 0, num(id)); },
+  async rename(id, name) { q('UPDATE users SET name=? WHERE id=?').run(name, num(id)); },
+  async remove(id) {
+    q('DELETE FROM sessions WHERE user_id=?').run(num(id));
+    q('DELETE FROM users WHERE id=?').run(num(id));
+  },
   async byToken(token) {
     const s = q('SELECT * FROM sessions WHERE token=?').get(token);
     return s ? users.byId(s.user_id) : null;
@@ -133,12 +148,13 @@ const classes = {
   async byId(id) { return toClass(q('SELECT * FROM classes WHERE id=?').get(num(id))); },
   async byInviteCode(code) { return toClass(q('SELECT * FROM classes WHERE invite_code=?').get(code)); },
   async all() { return q('SELECT * FROM classes').all().map(toClass); },
-  /** 老师看自己带的班，学生看自己加入的班 */
+  /** 学生看自己加入的班，老师看自己带的班，负责人看全校 */
   async idsForUser(user) {
-    return user.role === 'student'
-      ? q('SELECT class_id AS id FROM class_members WHERE student_id=?').all(num(user.id)).map((r) => r.id)
-      : q('SELECT id FROM classes WHERE teacher_id=?').all(num(user.id)).map((r) => r.id);
+    if (user.role === 'student') return q('SELECT class_id AS id FROM class_members WHERE student_id=?').all(num(user.id)).map((r) => r.id);
+    if (user.role === 'admin') return q('SELECT id FROM classes ORDER BY id').all().map((r) => r.id);
+    return q('SELECT id FROM classes WHERE teacher_id=?').all(num(user.id)).map((r) => r.id);
   },
+  async countByTeacher(teacherId) { return count('SELECT COUNT(*) n FROM classes WHERE teacher_id=?', num(teacherId)); },
   async create({ name, inviteCode, teacherId, subjectId, gradeBand }) {
     const r = q('INSERT INTO classes (name, invite_code, teacher_id, subject_id, grade_band, created_at) VALUES (?,?,?,?,?,?)')
       .run(name, inviteCode, num(teacherId), subjectId ? num(subjectId) : null, gradeBand || '', now());

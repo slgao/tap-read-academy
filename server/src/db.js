@@ -276,6 +276,15 @@ db.prepare('UPDATE homeworks SET subject_id=? WHERE subject_id IS NULL').run(en.
 db.prepare("UPDATE homeworks SET kind='follow_read' WHERE kind IS NULL").run();
 
 // 培训机构按科目开班、同一科目按年级段分班：班级带上科目和年级段
+// 每位老师一个自己的口令（存哈希），由负责人在后台生成；停用后不能再登录
+addColumn('users', 'login_code', 'TEXT');
+addColumn('users', 'active', 'INTEGER DEFAULT 1');
+// 升级前只有"老师"一种身份：把最早的那个老师升为负责人，由他来给其他老师建账号
+if (!db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get()) {
+  const first = db.prepare("SELECT id FROM users WHERE role='teacher' ORDER BY id LIMIT 1").get();
+  if (first) db.prepare("UPDATE users SET role='admin' WHERE id=?").run(first.id);
+}
+
 addColumn('classes', 'subject_id', 'INTEGER REFERENCES subjects(id)');
 addColumn('classes', 'grade_band', "TEXT DEFAULT ''");
 db.prepare('UPDATE classes SET subject_id=? WHERE subject_id IS NULL').run(en.id);   // 升级前的班都是英语班
