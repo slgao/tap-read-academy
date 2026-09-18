@@ -432,9 +432,11 @@
               ${u.active ? '' : '<span class="pill todo">已停用</span>'}</div>
           </div>
           <div class="muted small mt">${u.classCount} 个班${u.role === 'admin' || u.hasCode ? '' : ' · 还没有口令，先点「重置口令」'}${u.isMe ? ' · 当前登录' : ''}</div>
-          ${u.role === 'admin' && u.isMe ? '<div class="muted small mt">负责人用部署时设置的主口令登录</div>' : `
+          ${u.role === 'admin' && u.isMe ? `<div class="row between mt"><span class="muted small">负责人用部署时设置的主口令登录</span>
+            <button class="btn sm grey" data-act="renameStaff" data-id="${u.id}" data-name="${esc(u.name)}">改名</button></div>` : `
           <div class="row mt" style="gap:8px;flex-wrap:wrap">
             <button class="btn sm ghost" data-act="resetCode" data-id="${u.id}" data-name="${esc(u.name)}">重置口令</button>
+            <button class="btn sm grey" data-act="renameStaff" data-id="${u.id}" data-name="${esc(u.name)}">改名</button>
             <button class="btn sm grey" data-act="toggleStaff" data-id="${u.id}" data-on="${u.active ? 1 : 0}">${u.active ? '停用' : '恢复'}</button>
             ${u.classCount ? '' : `<button class="btn sm danger" data-act="delStaff" data-id="${u.id}" data-name="${esc(u.name)}">删除</button>`}
           </div>`}
@@ -479,6 +481,19 @@
       if (!confirm(`给 ${el.dataset.name} 换一个新口令？旧口令马上失效。`)) return;
       try { const r = await API.post(`/api/admin/teachers/${el.dataset.id}/code`); showCode(r.name, r.code); }
       catch (e) { toast(e.message); }
+    },
+    async renameStaff(el) {
+      const name = (prompt('改成什么名字？学生和家长会看到', el.dataset.name) || '').trim();
+      if (!name || name === el.dataset.name) return;
+      try {
+        await API.put('/api/admin/teachers/' + el.dataset.id, { name });
+        const me = Store.user || {};
+        if (String(me.id) === String(el.dataset.id)) {
+          Store.user = { ...me, name };
+          toast('改好了。下次登录请用新名字加原来的口令', 3200);
+        } else toast('改好了，口令不变');
+        render();
+      } catch (e) { toast(e.message, 2600); }
     },
     async toggleStaff(el) {
       const on = el.dataset.on === '1';
