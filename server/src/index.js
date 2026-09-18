@@ -76,6 +76,14 @@ function serveStatic(req, res, baseDir, relPath) {
   fs.createReadStream(file).pipe(res);
 }
 
+// 每 6 小时做一次维护：WAL 合并回主库、清掉 120 天前的登录凭证
+const repo = require('./repo');
+setInterval(() => {
+  repo.maintain().then((r) => {
+    if (r.prunedSessions) console.log('[maintain] 清理过期登录', r.prunedSessions, '条');
+  }).catch((e) => console.error('[maintain]', e.message));
+}, 6 * 3600 * 1000).unref();
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   const p = decodeURIComponent(url.pathname);

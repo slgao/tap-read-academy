@@ -106,17 +106,20 @@
   }
   window.addEventListener('popstate', () => { if (S.view !== 'home') go('home'); });
 
+  let renderSeq = 0;
   function render() {
     const V = VIEWS[S.view] || VIEWS.home;
+    const seq = ++renderSeq;                 // 慢请求回来时页面可能已经切走了
     $top.innerHTML = V.top();
     $view.className = V.bare ? 'reader' : (V.cls || (V.noTab ? 'view no-tab' : 'view'));
     $view.innerHTML = '<div class="empty">加载中…</div>';
     $tab.hidden = !V.tab;
     if (V.tab) renderTab();
     Promise.resolve(V.body()).then((html) => {
+      if (seq !== renderSeq) return;
       $view.innerHTML = html;
       if (V.after) V.after();
-    }).catch((e) => { $view.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+    }).catch((e) => { if (seq === renderSeq) $view.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   }
 
   function renderTab() {
@@ -790,7 +793,8 @@
         <div class="row between"><div class="bigscore">${d.hours.leftHours}<small> 课时</small></div>
           ${d.hours.expiresAt ? `<span class="muted small">${esc(d.hours.expiresAt)} 到期</span>` : ''}</div>
         ${list.length ? list.map((p) => `<div class="muted small mt">${p.subject ? esc(p.subject.name) : '不限科目'}：
-          共 ${p.sumHours} 课时，已上 ${p.usedHours}，剩 ${p.leftHours}${p.status === 'paused' ? '（停课中）' : ''}</div>`).join('')
+          共 ${p.sumHours} 课时，已上 ${p.usedHours}，剩 ${p.leftHours}${p.status === 'paused' ? '（停课中）'
+            : p.expired ? '（已过期，请联系老师）' : ''}</div>`).join('')
           : '<div class="muted small mt">还没有课包，可以问老师</div>'}
         ${d.attendance.length ? `<div class="hr"></div><div class="muted small mb">最近上课</div>
           ${d.attendance.slice(0, 5).map((a) => `<div class="row between" style="padding:3px 0">

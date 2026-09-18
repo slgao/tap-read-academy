@@ -27,6 +27,7 @@
 
   function go(view, data) { S.view = view; Object.assign(S, data || {}); render(); }
 
+  let renderSeq = 0;
   function render() {
     if (!Store.token) return renderLogin();
     const admin = isAdmin();
@@ -36,9 +37,12 @@
       <a class="btn sm ghost" href="teacher.html">手机端</a>
       <button class="btn sm grey" data-act="logout">退出</button>`;
     $main.innerHTML = '<div class="empty">加载中…</div>';
+    const seq = ++renderSeq;                 // 切页面时，旧请求的结果不能盖掉新页面
     const fn = { students: viewStudents, report: viewReport, grid: viewGrid, leads: viewLeads }[S.view] || viewStudents;
-    Promise.resolve(fn()).then((html) => { $main.innerHTML = html; if (fn.after) fn.after(); })
-      .catch((e) => { $main.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+    Promise.resolve(fn()).then((html) => {
+      if (seq !== renderSeq) return;
+      $main.innerHTML = html; if (fn.after) fn.after();
+    }).catch((e) => { if (seq === renderSeq) $main.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   }
 
   function renderLogin() {
@@ -61,7 +65,7 @@
     let rows = list;
     if (f.q) rows = rows.filter((x) => x.name.includes(f.q) || (x.school || '').includes(f.q) || (x.phone || '').includes(f.q));
     if (f.status) rows = rows.filter((x) => (x.status || 'active') === f.status);
-    if (f.classId) rows = rows.filter((x) => x.classes.includes(f.classId));
+    if (f.classId) rows = rows.filter((x) => (x.classIds || []).includes(Number(f.classId)));
     if (f.low) rows = rows.filter((x) => x.leftHours <= 4);
     S.rows = rows;
 
@@ -72,7 +76,7 @@
         ${Object.entries(ST_NAME).map(([k, v]) => `<option value="${k}"${f.status === k ? ' selected' : ''}>${v}</option>`).join('')}
       </select>
       <select id="f-class"><option value="">全部班级</option>
-        ${classes.map((c) => `<option value="${esc(c.name)}"${f.classId === c.name ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
+        ${classes.map((c) => `<option value="${c.id}"${String(f.classId) === String(c.id) ? ' selected' : ''}>${esc(c.subject ? c.subject.name + ' · ' : '')}${esc(c.name)}</option>`).join('')}
       </select>
       <label class="of-check"><input type="checkbox" id="f-low"${f.low ? ' checked' : ''}> 只看课时不足（≤4）</label>
       <div class="grow"></div>

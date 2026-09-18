@@ -21,8 +21,10 @@
 
   function go(v, d) { Clip.stop(); player.stop(); S.view = v; Object.assign(S, d || {}); render(); }
 
+  let renderSeq = 0;
   function render() {
     const V = VIEWS[S.view] || VIEWS.classes;
+    const seq = ++renderSeq;                 // 上一个页面的数据回来晚了，不能把新页面盖掉
     $top.innerHTML = V.top();
     $view.className = V.noTab ? 'view no-tab' : 'view';
     $view.innerHTML = '<div class="empty">加载中…</div>';
@@ -32,8 +34,10 @@
       ['students', '学员', TAB_IC.folder], ['hwlist', '作业', TAB_IC.pencil], ['me', '我的', TAB_IC.user]];
     if (V.tab) $tab.innerHTML = tabs
       .map(([k, t, icon]) => `<button class="${S.view === k ? 'on' : ''}" data-go="${k}" aria-label="${t}"><span class="tab-ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></span>${t}</button>`).join('');
-    return Promise.resolve(V.body()).then((h) => { $view.innerHTML = h; if (V.after) V.after(); })
-      .catch((e) => { $view.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+    return Promise.resolve(V.body()).then((h) => {
+      if (seq !== renderSeq) return;
+      $view.innerHTML = h; if (V.after) V.after();
+    }).catch((e) => { if (seq === renderSeq) $view.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   }
 
   document.addEventListener('click', (e) => {
@@ -162,7 +166,7 @@
   const CLASSES = {
     top: () => `<h1><img src="brand/logo-96.png" alt="">班级</h1><button class="btn sm ghost" data-go="classform" data-arg='{"clsId":null}'>+ 新建</button>`, tab: true,
     body: async () => {
-      const cs = await API.get('/api/classes');
+      const cs = await API.get('/api/classes?withMembers=1');
       if (!cs.length) return `<div class="empty">还没有班级<br><span class="small">点右上角新建，先选科目和年级段</span></div>`;
       // 负责人也带课：自己的班排前面，别人的班压暗显示（仍然可以管理）
       const myId = (Store.user || {}).id;
@@ -181,7 +185,7 @@
       for (const g of groups) {
         const cards = [];
         for (const c of g.list) {
-          const ss = await API.get(`/api/classes/${c.id}/students`);
+          const ss = c.members || [];
           cards.push(`<div class="card cls ${g.subject ? esc(g.subject.color) : ''} ${g.dim ? 'dim' : ''}">
             <div class="row between"><div class="strong grow ellip">${esc(c.name)}</div>
               <div class="row" style="gap:6px">
@@ -502,7 +506,8 @@
       return `<div class="card tight mb"><input id="stu-q" value="${esc(S.stuQ || '')}" placeholder="搜学员姓名" data-act="noop"></div>
         ${low.length ? `<div class="card tight mb warnbox"><div class="strong">课时快用完了</div>
           <div class="small mt">${low.map((x) => `${esc(x.name)} 剩 ${x.leftHours} 课时`).join('、')}</div></div>` : ''}
-        ${list.length ? list.map((x) => `<div class="card stu" data-go="student" data-arg='${JSON.stringify({ stuId: x.id })}'>
+        ${list.length > 60 ? `<div class="muted small mb">共 ${list.length} 人，先显示 60 个，用上面的搜索框找人</div>` : ''}
+        ${list.length ? list.slice(0, 60).map((x) => `<div class="card stu" data-go="student" data-arg='${JSON.stringify({ stuId: x.id })}'>
           <div class="row between">
             <div class="strong grow ellip">${esc(x.name)}
               ${x.status === 'active' ? '' : `<span class="pill">${ST_NAME[x.status] || ''}</span>`}</div>
@@ -1341,7 +1346,8 @@
           date: document.getElementById('roll-date').value,
           hours: Number(document.getElementById('roll-hours').value) || 1, records,
         });
-        toast(`已点名 ${r.marked} 人，共扣 ${r.usedHours} 课时` + (r.noPackage.length ? `；${r.noPackage.join('、')} 没有课包` : ''), 3200);
+        toast(`已点名 ${r.marked} 人，共扣 ${r.usedHours} 课时`
+          + (r.noPackage.length ? `；${r.noPackage.join('、')} 没有可用课包（没录、已用完、过期或停课中）` : ''), 3600);
         render();
       } catch (e) { toast(e.message, 2600); el.disabled = false; }
     },

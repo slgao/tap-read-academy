@@ -202,6 +202,8 @@ on('GET', '/api/classes', async (ctx) => {
   const subs = await repo.subjects.all();
   const ids = await repo.classes.idsForUser(ctx.user);
   const [byId, counts] = [await repo.classes.byIds(ids), await repo.classes.memberCounts(ids)];
+  // withMembers=1：把各班名单一起带回去，省得前端一个班一个请求
+  const members = ctx.query.withMembers ? await repo.classes.membersOfMany(ids) : null;
   const rows = [];
   for (const id of ids) {
     const c = byId.get(id);
@@ -209,7 +211,8 @@ on('GET', '/api/classes', async (ctx) => {
     const t = ctx.user.role === 'admin' ? await repo.users.byId(c.teacherId) : null;
     rows.push({ id: c.id, name: c.name, inviteCode: c.inviteCode, teacherId: c.teacherId,
       teacherName: t ? t.name : (c.teacherId === ctx.user.id ? ctx.user.name : ''),
-      subject: subjectView(subs.find((x) => x.id === c.subjectId)), gradeBand: c.gradeBand, studentCount: counts.get(c.id) || 0 });
+      subject: subjectView(subs.find((x) => x.id === c.subjectId)), gradeBand: c.gradeBand, studentCount: counts.get(c.id) || 0,
+      ...(members ? { members: members.get(c.id) || [] } : {}) });
   }
   // 按科目、年级段排好，界面直接分组显示
   const sortOf = (r) => (subs.find((x) => r.subject && x.id === r.subject.id) || { sort: 99 }).sort;
@@ -768,12 +771,13 @@ on('GET', '/api/admin/stats', async (ctx) => {
 on('GET', '/api/admin/teachers', async (ctx) => {
   const staff = await repo.users.staff();
   const mineSubjects = await repo.subjects.byTeachers(staff.map((u) => u.id));
+  const classCounts = await repo.classes.countsByTeacher();
   const out = [];
   for (const u of staff) {
     out.push({ id: u.id, name: u.name, role: u.role, roleName: ROLE_NAME[u.role] || u.role,
       active: !!u.active, hasCode: !!u.loginCode, canShowCode: !!u.loginCodeEnc, isMe: u.id === ctx.user.id,
       subjectIds: mineSubjects.get(u.id) || [],
-      classCount: await repo.classes.countByTeacher(u.id), createdAt: u.createdAt });
+      classCount: classCounts.get(u.id) || 0, createdAt: u.createdAt });
   }
   ok(ctx.res, out);
 }, { roles: ['admin'] });
@@ -1111,15 +1115,30 @@ const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
 /** 老师只能看自己班里的学生，负责人看全校 */
 async function visibleStudentIds(user) {
   if (user.role === 'admin') return null;                      // null = 不限
+  return repo.classes.studentIdsOfClasses(await repo.classes.idsForUser(user));
+}
+
+/** 学员 -> 他所在的班（名字和 id）。一次查完，不再按班循环 */
+async function classesByStudent(user) {
   const ids = await repo.classes.idsForUser(user);
-  const out = new Set();
-  for (const cid of ids) for (const m of await repo.classes.members(cid)) out.add(m.id);
-  return [...out];
+  const [byId, members] = [await repo.classes.byIds(ids), await repo.classes.membersOfMany(ids)];
+  const out = new Map();
+  for (const [cid, list] of members) {
+    const c = byId.get(cid);
+    if (!c) continue;
+    for (const m of list) {
+      const arr = out.get(m.id) || out.set(m.id, []).get(m.id);
+      arr.push(c);
+    }
+  }
+  return out;
 }
 
 const pkgView = (p, subjects, withMoney) => {
   const total = (p.totalHours || 0) + (p.giftHours || 0);
+  const expired = !!(p.expiresAt && p.expiresAt < today() && p.status === 'active');
   const v = {
+    expired,
     id: p.id, subject: subjectView(subjects.find((x) => x.id === p.subjectId)),
     totalHours: p.totalHours, giftHours: p.giftHours, sumHours: total,
     usedHours: p.usedHours, leftHours: Math.round((total - p.usedHours) * 100) / 100,
@@ -1149,19 +1168,14 @@ on('GET', '/api/admin/students', async (ctx) => {
   if (kw) list = list.filter((u) => u.name.includes(kw));
   const ids = list.map((u) => u.id);
   const [profiles, pkgs] = [await repo.profiles.byUsers(ids), await repo.packages.byStudents(ids)];
-  const classesOf = new Map();
-  for (const cid of await repo.classes.idsForUser(ctx.user.role === 'admin' ? { role: 'admin' } : ctx.user)) {
-    const c = await repo.classes.byId(cid);
-    for (const m of await repo.classes.members(cid)) {
-      const arr = classesOf.get(m.id) || classesOf.set(m.id, []).get(m.id);
-      if (c) arr.push(c.name);
-    }
-  }
+  const classesOf = await classesByStudent(ctx.user);
   const out = list.map((u) => {
     const p = profiles.get(u.id) || {};
     return { id: u.id, name: u.name, gender: p.gender || '', school: p.school || '', grade: p.grade || '',
       phone: ctx.user.role === 'admin' ? (p.phone || '') : '', parentName: p.parentName || '',
-      status: p.status || 'active', classes: classesOf.get(u.id) || [],
+      status: p.status || 'active',
+      classes: (classesOf.get(u.id) || []).map((c) => c.name),
+      classIds: (classesOf.get(u.id) || []).map((c) => c.id),
       ...hoursOf(pkgs.get(u.id) || []), stars: u.stars };
   });
   out.sort((a, b) => (a.status === b.status ? a.name.localeCompare(b.name, 'zh') : a.status === 'active' ? -1 : 1));
@@ -1172,13 +1186,23 @@ on('POST', '/api/admin/students', async (ctx) => {
   const name = String(ctx.body.name || '').trim().slice(0, 20);
   if (!name) return fail(ctx.res, 1001, '请填写学员姓名');
   let user = await repo.users.byNameRole(name, 'student');
+  const existed = !!user;
   if (!user) user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'student', name });
+  else if (!ctx.body.force) {
+    // 同名的已经有档案：不要悄悄并成一个人，先让负责人确认
+    const old = await repo.profiles.byUser(user.id);
+    const inClasses = await repo.classes.forStudent(user.id);
+    if (old || inClasses.length) {
+      return fail(ctx.res, 3015, `已经有一个叫「${name}」的学员${inClasses.length ? `（在${inClasses.map((c) => c.name).join('、')}）` : ''}。`
+        + '如果是同一个孩子，直接打开他的档案改；如果是两个孩子，名字里加点区分，比如「李明(三年级)」');
+    }
+  }
   await repo.profiles.save(user.id, ctx.body);
   if (ctx.body.classId) {
     if (!await canTouchClass(ctx.user, ctx.body.classId)) return fail(ctx.res, 403, '不能把学生加到别人的班');
     await repo.classes.addMember(ctx.body.classId, user.id);
   }
-  ok(ctx.res, { id: user.id, name: user.name });
+  ok(ctx.res, { id: user.id, name: user.name, existed });
 }, { roles: ['admin'] });
 
 on('GET', '/api/admin/students/:id', async (ctx) => {
@@ -1189,14 +1213,8 @@ on('GET', '/api/admin/students/:id', async (ctx) => {
   const subjects = await repo.subjects.all();
   const admin = ctx.user.role === 'admin';
   const pkgs = await repo.packages.byStudent(u.id);
-  const classes = [];
-  for (const cid of await repo.classes.idsForUser({ role: 'admin' })) {
-    const members = await repo.classes.members(cid);
-    if (members.some((m) => m.id === u.id)) {
-      const c = await repo.classes.byId(cid);
-      if (c) classes.push({ id: c.id, name: c.name, subject: subjectView(subjects.find((x) => x.id === c.subjectId)) });
-    }
-  }
+  const classes = (await repo.classes.forStudent(u.id))
+    .map((c) => ({ id: c.id, name: c.name, subject: subjectView(subjects.find((x) => x.id === c.subjectId)) }));
   ok(ctx.res, {
     id: u.id, name: u.name, stars: u.stars, streak: u.streak,
     profile: (await repo.profiles.byUser(u.id)) || { status: 'active' },
@@ -1329,12 +1347,24 @@ on('POST', '/api/classes/:id/attendance', async (ctx) => {
   if (!records.length) return fail(ctx.res, 1001, '还没有点名');
 
   const members = await repo.classes.members(cls.id);
+  const memberIds = new Set(members.map((m) => m.id));
+  const prevRows = new Map((await repo.attendance.byClassDate(cls.id, date)).map((a) => [a.studentId, a]));
+  const seen = new Set();
   const noPackage = [];
   let marked = 0, used = 0;
   for (const r of records) {
-    if (!members.some((m) => m.id === Number(r.studentId))) continue;
+    const sid = Number(r.studentId);
+    if (!memberIds.has(sid) || seen.has(sid)) continue;         // 不是本班的、或同一人重复提交的，跳过
     if (!ATT_STATUS.includes(r.status)) continue;
-    const prev = (await repo.attendance.byClassDate(cls.id, date)).find((a) => a.studentId === Number(r.studentId));
+    seen.add(sid);
+    const prev = prevRows.get(sid);
+    const wantHours = r.status === 'leave' ? 0 : (Number(r.hours) > 0 ? Number(r.hours) : per);
+    // 和上次点的一模一样就不动：既省事，也免得流水被重复点名刷满
+    if (prev && prev.status === r.status && Math.abs((prev.hours || 0) - (prev.packageId ? wantHours : 0)) < 1e-9) {
+      marked++;
+      used += prev.hours || 0;
+      continue;
+    }
     // 改点名结果：先把上次扣的课时退回去，再按新的扣
     if (prev && prev.hours && prev.packageId) {
       await repo.packages.addUsed(prev.packageId, -prev.hours);
@@ -1346,11 +1376,11 @@ on('POST', '/api/classes/:id/attendance', async (ctx) => {
       marked++;
       continue;
     }
-    const hours = r.status === 'leave' ? 0 : (Number(r.hours) > 0 ? Number(r.hours) : per);
+    const hours = wantHours;
     let pkg = null;
     if (hours > 0) {
       pkg = await repo.packages.pickForConsume(r.studentId, cls.subjectId, date);
-      if (!pkg) noPackage.push((members.find((m) => m.id === Number(r.studentId)) || {}).name);
+      if (!pkg) noPackage.push((members.find((m) => m.id === sid) || {}).name);
     }
     const att = await repo.attendance.upsert({ classId: cls.id, studentId: r.studentId, date, status: r.status,
       hours: pkg ? hours : 0, packageId: pkg ? pkg.id : null, note: String(r.note || '').slice(0, 100), createdBy: ctx.user.id });
@@ -1417,9 +1447,10 @@ on('GET', '/api/admin/dashboard', async (ctx) => {
   const subs = await repo.subjects.all();
   const counts = await repo.classes.memberCounts(classIds);
 
+  const byId = await repo.classes.byIds(classIds);
   const classes = [];
   for (const id of classIds) {
-    const c = await repo.classes.byId(id);
+    const c = byId.get(id);
     if (!c) continue;
     classes.push({ id: c.id, name: c.name, subject: subjectView(subs.find((x) => x.id === c.subjectId)),
       studentCount: counts.get(c.id) || 0, marked: marked.has(c.id) });
@@ -1547,7 +1578,8 @@ on('POST', '/api/admin/students/bulk', async (ctx) => {
  */
 function csv(rows) {
   const esc = (v) => {
-    const t = v == null ? '' : String(v);
+    let t = v == null ? '' : String(v);
+    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;          // 防止 Excel 把单元格当公式执行
     return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
   };
   return '﻿' + rows.map((r) => r.map(esc).join(',')).join('\r\n');
@@ -1579,21 +1611,14 @@ on('GET', '/api/admin/export/:kind', async (ctx) => {
     if (onlyIds) list = list.filter((u) => onlyIds.includes(u.id));
     const ids = list.map((u) => u.id);
     const [profiles, pkgs] = [await repo.profiles.byUsers(ids), await repo.packages.byStudents(ids)];
-    const classNames = new Map();
-    for (const cid of await repo.classes.idsForUser(ctx.user)) {
-      const c = await repo.classes.byId(cid);
-      for (const m of await repo.classes.members(cid)) {
-        const arr = classNames.get(m.id) || classNames.set(m.id, []).get(m.id);
-        if (c) arr.push(c.name);
-      }
-    }
+    const classNames = await classesByStudent(ctx.user);
     const rows = [['姓名', '性别', '年级', '就读学校', '家长', '手机号', '状态', '班级', '剩余课时', '到期日', '累计星星']];
     for (const u of list) {
       const p = profiles.get(u.id) || {};
       const h = hoursOf(pkgs.get(u.id) || []);
       rows.push([u.name, p.gender || '', p.grade || '', p.school || '', p.parentName || '',
         admin ? (p.phone || '') : '***', { active: '在读', paused: '停课', left: '已结业' }[p.status || 'active'],
-        (classNames.get(u.id) || []).join(' / '), h.leftHours, h.expiresAt || '', u.stars]);
+        (classNames.get(u.id) || []).map((c) => c.name).join(' / '), h.leftHours, h.expiresAt || '', u.stars]);
     }
     return sendCsv(ctx.res, `学员名单_${stamp}`, rows);
   }

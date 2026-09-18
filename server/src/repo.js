@@ -149,6 +149,11 @@ const users = {
 /* ---------- sessions ---------- */
 const sessions = {
   async create(token, userId) { q('INSERT INTO sessions (token, user_id, created_at) VALUES (?,?,?)').run(token, num(userId), now()); },
+  /** 清掉很久没用的登录凭证，免得这张表一直涨 */
+  async pruneBefore(dateTime) {
+    const r = q('DELETE FROM sessions WHERE created_at < ?').run(dateTime);
+    return Number(r.changes || 0);
+  },
 };
 
 /* ---------- classes ---------- */
@@ -204,6 +209,34 @@ const classes = {
               JOIN users u ON u.id=m.student_id WHERE m.class_id=? ORDER BY u.stars DESC`).all(num(classId));
   },
   async memberCount(classId) { return count('SELECT COUNT(*) n FROM class_members WHERE class_id=?', num(classId)); },
+  /** 多个班的名单一次取完：classId -> [{id,name,stars,streak}] */
+  async membersOfMany(classIds) {
+    const out = new Map();
+    if (!classIds.length) return out;
+    const rows = q(`SELECT m.class_id, u.id, u.name, u.stars, u.streak FROM class_members m
+                    JOIN users u ON u.id=m.student_id WHERE m.class_id IN (${marks(classIds)})
+                    ORDER BY u.stars DESC`).all(...classIds.map(num));
+    for (const r of rows) {
+      const arr = out.get(r.class_id) || out.set(r.class_id, []).get(r.class_id);
+      arr.push({ id: r.id, name: r.name, stars: r.stars, streak: r.streak });
+    }
+    return out;
+  },
+  /** 一个学生在哪些班：一条查询代替遍历全校班级 */
+  async forStudent(studentId) {
+    return q(`SELECT c.* FROM classes c JOIN class_members m ON m.class_id=c.id WHERE m.student_id=? ORDER BY c.id`)
+      .all(num(studentId)).map(toClass);
+  },
+  /** 每位老师名下的班数：teacherId -> 个数 */
+  async countsByTeacher() {
+    return mapBy(q('SELECT teacher_id, COUNT(*) n FROM classes GROUP BY teacher_id').all(), 'teacher_id', (r) => r.n);
+  },
+  /** 这些班里的所有学生 id（老师的可见范围） */
+  async studentIdsOfClasses(classIds) {
+    if (!classIds.length) return [];
+    return [...new Set(q(`SELECT DISTINCT student_id FROM class_members WHERE class_id IN (${marks(classIds)})`)
+      .all(...classIds.map(num)).map((r) => r.student_id))];
+  },
   /** 一次取多个班（列表页用，避免一个班一条查询） */
   async byIds(ids) {
     if (!ids.length) return new Map();
@@ -990,7 +1023,17 @@ const leads = {
   async recentByPhone(phone, sinceTime) { return count('SELECT COUNT(*) n FROM leads WHERE phone=? AND created_at >= ?', phone, sinceTime); },
 };
 
+/** 日常维护：合并 WAL、更新统计信息、清理过期登录 */
+async function maintain(keepDays = 120) {
+  const before = new Date(Date.now() - keepDays * 86400000).toISOString().replace('T', ' ').slice(0, 19);
+  const gone = await sessions.pruneBefore(before);
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  db.exec('PRAGMA optimize');
+  return { prunedSessions: gone };
+}
+
 module.exports = {
+  maintain,
   users, sessions, classes, books, lessons, pages, hotspots, assets, courses, rewards, redemptions,
   profiles, packages, hourLogs, attendance, leaves, settings,
   homeworks, submissions, submissionItems, checkins,
