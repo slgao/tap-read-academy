@@ -37,7 +37,7 @@ const mapBy = (rows, key, val) => {
 const toUser = (r) => r && ({
   id: r.id, openid: r.openid, role: r.role, name: r.name, avatar: r.avatar,
   stars: r.stars, streak: r.streak, lastCheckin: r.last_checkin, createdAt: r.created_at,
-  loginCode: r.login_code, active: r.active == null ? 1 : r.active,
+  loginCode: r.login_code, loginCodeEnc: r.login_code_enc, active: r.active == null ? 1 : r.active,
 });
 const toClass = (r) => r && ({
   id: r.id, name: r.name, inviteCode: r.invite_code, teacherId: r.teacher_id, createdAt: r.created_at,
@@ -117,7 +117,9 @@ const users = {
   async staff() {
     return q("SELECT * FROM users WHERE role IN ('teacher','admin') ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, id").all().map(toUser);
   },
-  async setLoginCode(id, hash) { q('UPDATE users SET login_code=? WHERE id=?').run(hash, num(id)); },
+  async setLoginCode(id, hash, enc) {
+    q('UPDATE users SET login_code=?, login_code_enc=? WHERE id=?').run(hash, enc || null, num(id));
+  },
   async setActive(id, on) { q('UPDATE users SET active=? WHERE id=?').run(on ? 1 : 0, num(id)); },
   async setRole(id, role) { q('UPDATE users SET role=? WHERE id=?').run(role, num(id)); },
   async rename(id, name) { q('UPDATE users SET name=? WHERE id=?').run(name, num(id)); },

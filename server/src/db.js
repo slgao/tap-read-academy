@@ -429,6 +429,8 @@ db.prepare("UPDATE homeworks SET kind='follow_read' WHERE kind IS NULL").run();
 // 每位老师一个自己的口令（存哈希），由负责人在后台生成；停用后不能再登录
 addColumn('users', 'login_code', 'TEXT');
 addColumn('users', 'active', 'INTEGER DEFAULT 1');
+// 口令的可还原副本（用主口令派生的密钥加密），负责人忘了可以查回来；验证仍然用哈希
+addColumn('users', 'login_code_enc', 'TEXT');
 // 升级前只有"老师"一种身份：把最早的那个老师升为负责人，由他来给其他老师建账号
 if (!db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get()) {
   const first = db.prepare("SELECT id FROM users WHERE role='teacher' ORDER BY id LIMIT 1").get();

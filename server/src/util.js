@@ -39,6 +39,25 @@ function readBody(req, limitBytes = 48 * 1024 * 1024) {
 
 const rid = () => crypto.randomBytes(16).toString('hex');
 const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+
+/* 老师口令的可还原保存：用主口令（TEACHER_CODE）派生密钥做 AES-256-GCM。
+ * 数据库或备份单独被拿到也解不开；换了主口令，旧的口令副本就看不了了，重置一个即可。 */
+const secretKey = () => crypto.createHash('sha256').update('tap-read|' + (process.env.TEACHER_CODE || 'dev')).digest();
+function encryptSecret(text) {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', secretKey(), iv);
+  const enc = Buffer.concat([c.update(String(text), 'utf8'), c.final()]);
+  return [iv.toString('base64'), c.getAuthTag().toString('base64'), enc.toString('base64')].join('.');
+}
+function decryptSecret(blob) {
+  try {
+    const [iv, tag, data] = String(blob || '').split('.');
+    if (!iv || !tag || !data) return null;
+    const d = crypto.createDecipheriv('aes-256-gcm', secretKey(), Buffer.from(iv, 'base64'));
+    d.setAuthTag(Buffer.from(tag, 'base64'));
+    return Buffer.concat([d.update(Buffer.from(data, 'base64')), d.final()]).toString('utf8');
+  } catch { return null; }
+}
 /** 老师登录口令：6 位数字，好念也好在手机上输 */
 const staffCode = () => String(crypto.randomInt(100000, 1000000));
 // 一天按北京时间算：机构和学生都在国内。用固定 +8 而不是服务器本地时区，
@@ -55,4 +74,4 @@ function inviteCode() {
   return s;
 }
 
-module.exports = { json, ok, fail, readBody, rid, sha256, staffCode, today, dayKey, now, inviteCode };
+module.exports = { json, ok, fail, readBody, rid, sha256, staffCode, encryptSecret, decryptSecret, today, dayKey, now, inviteCode };

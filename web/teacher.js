@@ -786,6 +786,7 @@
           ${u.role === 'admin' && u.isMe ? `<div class="row between mt"><span class="muted small">负责人用部署时设置的主口令登录</span>
             <button class="btn sm grey" data-act="renameStaff" data-id="${u.id}" data-name="${esc(u.name)}">改名</button></div>` : `
           <div class="row mt" style="gap:8px;flex-wrap:wrap">
+            ${u.canShowCode ? `<button class="btn sm star" data-act="showCode" data-id="${u.id}">查看口令</button>` : ''}
             <button class="btn sm ghost" data-act="resetCode" data-id="${u.id}" data-name="${esc(u.name)}">重置口令</button>
             <button class="btn sm grey" data-act="renameStaff" data-id="${u.id}" data-name="${esc(u.name)}">改名</button>
             <button class="btn sm grey" data-act="toggleRole" data-id="${u.id}" data-name="${esc(u.name)}" data-role="${u.role}">${u.role === 'admin' ? '改为老师' : '设为负责人'}</button>
@@ -949,13 +950,14 @@
   }
 
   /** 新口令只显示这一次，让负责人抄下来发给老师 */
-  function showCode(name, code) {
+  function showCode(name, code, existing) {
     const m = document.createElement('div');
     m.className = 'poster-mask'; m.id = 'codebox';
     m.innerHTML = `<div class="poster-sheet" role="dialog" aria-label="老师口令">
         <div class="center"><div class="section-title">${esc(name)} 的口令</div>
           <div class="bigcode">${esc(code)}</div>
-          <div class="muted small">把这 6 位数字发给${esc(name)}，登录时输姓名和它。<br>这个口令只显示这一次，忘了可以重置。</div></div>
+          <div class="muted small">把这 6 位数字发给${esc(name)}，登录时输姓名和它。
+            <br>${existing ? '这是当前在用的口令，随时可以回来查。' : '忘了可以随时回来查看或重置。'}</div></div>
         <div class="row" style="gap:10px">
           <button class="btn ghost grow" data-act="copyCode" data-code="${esc(code)}">复制</button>
           <button class="btn grow" data-act="closeCode">知道了</button>
@@ -997,6 +999,10 @@
       if (!name) return;
       try { const r = await API.post('/api/admin/teachers', { name }); render(); showCode(r.name, r.code); }
       catch (e) { toast(e.message, 2600); }
+    },
+    async showCode(el) {
+      try { const r = await API.get(`/api/admin/teachers/${el.dataset.id}/code`); showCode(r.name, r.code, true); }
+      catch (e) { toast(e.message, 3200); }
     },
     async resetCode(el) {
       if (!confirm(`给 ${el.dataset.name} 换一个新口令？旧口令马上失效。`)) return;

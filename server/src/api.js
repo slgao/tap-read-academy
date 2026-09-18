@@ -5,7 +5,7 @@
  */
 const repo = require('./repo');
 const store = require('./storage');
-const { ok, fail, readBody, rid, sha256, staffCode, today, dayKey, inviteCode } = require('./util');
+const { ok, fail, readBody, rid, sha256, staffCode, encryptSecret, decryptSecret, today, dayKey, inviteCode } = require('./util');
 const grading = require('./grading');
 
 const CHECKIN_SECONDS = Number(process.env.CHECKIN_SECONDS) || 300;   // 当天学习满 5 分钟算打卡
@@ -769,7 +769,7 @@ on('GET', '/api/admin/teachers', async (ctx) => {
   const out = [];
   for (const u of staff) {
     out.push({ id: u.id, name: u.name, role: u.role, roleName: ROLE_NAME[u.role] || u.role,
-      active: !!u.active, hasCode: !!u.loginCode, isMe: u.id === ctx.user.id,
+      active: !!u.active, hasCode: !!u.loginCode, canShowCode: !!u.loginCodeEnc, isMe: u.id === ctx.user.id,
       subjectIds: mineSubjects.get(u.id) || [],
       classCount: await repo.classes.countByTeacher(u.id), createdAt: u.createdAt });
   }
@@ -788,8 +788,18 @@ on('POST', '/api/admin/teachers', async (ctx) => {
   }
   const code = staffCode();
   const user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'teacher', name });
-  await repo.users.setLoginCode(user.id, sha256(code));
+  await repo.users.setLoginCode(user.id, sha256(code), encryptSecret(code));
   ok(ctx.res, { id: user.id, name, code });
+}, { roles: ['admin'] });
+
+/** 查看某位老师当前的口令（负责人忘了发给谁时用） */
+on('GET', '/api/admin/teachers/:id/code', async (ctx) => {
+  const u = await repo.users.byId(ctx.params.id);
+  if (!u || u.role === 'student') return fail(ctx.res, 3013, '账号不存在');
+  if (u.role === 'admin') return fail(ctx.res, 3013, '负责人用部署时设置的主口令登录，系统里不保存');
+  const code = u.loginCodeEnc ? decryptSecret(u.loginCodeEnc) : null;
+  if (!code) return fail(ctx.res, 3013, '这个口令是早先设置的，看不回来了，点「重置口令」生成一个新的');
+  ok(ctx.res, { id: u.id, name: u.name, code });
 }, { roles: ['admin'] });
 
 /** 重置口令：老师忘了口令时用，旧口令立刻失效 */
@@ -797,7 +807,7 @@ on('POST', '/api/admin/teachers/:id/code', async (ctx) => {
   const u = await repo.users.byId(ctx.params.id);
   if (!u || u.role === 'student') return fail(ctx.res, 3013, '账号不存在');
   const code = staffCode();
-  await repo.users.setLoginCode(u.id, sha256(code));
+  await repo.users.setLoginCode(u.id, sha256(code), encryptSecret(code));
   ok(ctx.res, { id: u.id, name: u.name, code });
 }, { roles: ['admin'] });
 

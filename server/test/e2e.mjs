@@ -177,6 +177,14 @@ const TAG = '__e2e_' + Date.now();
     const masterOnTeacher = await expectFail('POST', '/api/auth/login', { role: 'teacher', name: staff.name, teacherCode: process.env.TEACHER_CODE });
     check('老师账号不能用负责人主口令登录', /负责人给你的口令/.test(masterOnTeacher || ''), masterOnTeacher);
   }
+  // 负责人可以回头查老师当前的口令
+  const shown = await call('GET', `/api/admin/teachers/${staff.id}/code`, null, T.token);
+  check('负责人能查看老师当前口令', shown.code === staff.code, shown.code === staff.code ? '与创建时一致' : '不一致');
+  const selfCode = await expectFail('GET', `/api/admin/teachers/${T.user.id}/code`, null, T.token);
+  check('负责人自己的主口令不保存在系统里', /主口令/.test(selfCode || ''), selfCode);
+  const teacherPeek = await expectFail('GET', `/api/admin/teachers/${staff.id}/code`, null, other.token);
+  check('老师看不了别人的口令', /无权限/.test(teacherPeek || ''), teacherPeek);
+
   const leadPeek = await expectFail('GET', '/api/admin/leads', null, other.token);
   check('老师看不到家长手机号', /无权限/.test(leadPeek || ''), leadPeek);
   const staffPeek = await expectFail('GET', '/api/admin/teachers', null, other.token);
