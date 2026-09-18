@@ -41,6 +41,11 @@
     if (a) (ACT[a.dataset.act] || (() => {}))(a, e);
   });
 
+  document.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (el.matches('input[type="text"], input:not([type]), textarea')) S.lastField = el;
+  });
+
   document.addEventListener('input', (e) => {
     const el = e.target, f = el.dataset.qf;
     if (!f) return;
@@ -196,6 +201,10 @@
         <div id="q-list"></div>
         <div class="card"><div class="section-title mb">再加一道题</div>
           <div class="qtypes">${Object.entries(TYPE_NAME).map(([t, n]) => `<button class="btn sm ghost" data-act="qAdd" data-t="${t}">${n}</button>`).join('')}</div>
+          <div class="row mt" style="gap:8px;flex-wrap:wrap">
+            <button class="btn sm mint" data-act="genMath">自动出计算题</button>
+            <button class="btn sm grey" data-act="symbols">插入符号</button>
+          </div>
           <div class="muted small mt">单选、多选、判断、填空由系统自动判分；拍照、文字、录音题交上来后由您打分。整张试卷可以拍照放在题目图片里。</div>
         </div>
         <button class="btn block" data-act="createQHw">发布作业</button>`;
@@ -262,6 +271,13 @@
       </div>
     </div>`;
   }
+  /** 完全没动过的空题：自动出题或发布时直接丢掉，免得挡住发布 */
+  function isEmptyQ(q) {
+    return !String(q.stem || '').trim() && !q.img && !String(q.analysis || '').trim()
+      && (q.options || []).every((o) => !String(o || '').trim())
+      && (q.blanks || []).every((b) => !String(b || '').trim());
+  }
+
   function drawQs() {
     const box = document.getElementById('q-list');
     if (box) box.innerHTML = S.qs.map(qHtml).join('');
@@ -311,6 +327,7 @@
             <div class="row between mb"><span class="muted small">评星</span>
               <span class="stars" data-act="setStar" data-ri="${ri}" id="st-${ri}">${starStr(r.stars || 5)}</span></div>
             <textarea id="rv-${ri}" rows="2" placeholder="一句评语，学生和家长都能看到">${esc(r.reviewText || '')}</textarea>
+            ${isHwClass(d.homework.subject) ? rubricBox(ri, r) : ''}
             ${excellentBox(ri, r, d.homework.subject)}
             <div class="row mt" style="gap:8px">
               <button class="btn sm grow" data-act="doReview" data-ri="${ri}">提交批改</button>
@@ -322,6 +339,26 @@
 
   const statusPill = (st) => `<span class="pill ${st === 'reviewed' ? 'ok' : st === 'submitted' ? 'warn' : 'todo'}">
     ${st === 'reviewed' ? '已批改' : st === 'submitted' ? '待批改' : st === 'rejected' ? '已打回' : '未提交'}</span>`;
+
+  /* 作业班的评分栏：书写、坐姿、学习态度、作业效率各打星，再记用时和一句话 */
+  const RUBRIC = [['write', '书写'], ['posture', '坐姿'], ['attitude', '学习态度'], ['efficiency', '作业效率']];
+  const isHwClass = (subject) => !!subject && subject.code === 'hwclass';
+
+  function rubricBox(ri, r) {
+    const rb = r.rubric || {};
+    return `<div class="rubric">
+      <div class="section-title mb">作业班评分</div>
+      ${RUBRIC.map(([k, name]) => `<div class="row between rub-row">
+        <span>${name}</span>
+        <span class="stars" data-act="setRubStar" data-ri="${ri}" data-key="${k}" id="rb-${ri}-${k}" data-val="${rb[k] || 0}">${starStr(rb[k] || 0)}</span>
+      </div>`).join('')}
+      <div class="row rub-row" style="gap:10px">
+        <span class="grow">作业时长</span>
+        <input class="mins" type="number" min="1" max="600" inputmode="numeric" id="rb-${ri}-min" value="${rb.minutes || ''}" placeholder="分钟">
+      </div>
+      <input id="rb-${ri}-other" value="${esc(rb.other || '')}" placeholder="其他（比如：今天主动问了三个问题）">
+    </div>`;
+  }
 
   const excellentBox = (ri, r, subject) => `<label class="check mt"><input type="checkbox" id="ex-${ri}"${r.excellent ? ' checked' : ''}>
     <span>评为优秀作业<br><span class="muted small">学生可以生成喜报分享${subject && subject.code === 'calli' ? '，作品会进入书法作品展' : ''}</span></span></label>`;
@@ -358,6 +395,7 @@
               </div></div>`;
           }).join('')}
           <textarea id="rv-${ri}" rows="2" class="mt" placeholder="总评语，学生和家长都能看到">${esc(r.reviewText || '')}</textarea>
+          ${isHwClass(hw.subject) ? rubricBox(ri, r) : ''}
           ${excellentBox(ri, r, hw.subject)}
           <div class="row mt" style="gap:8px">
             <button class="btn sm grow" data-act="doGrade" data-ri="${ri}">${r.status === 'reviewed' ? '修改批改' : '提交批改'}</button>
@@ -365,6 +403,56 @@
           </div></div>` : '<div class="muted small mt">还没交</div>'}
       </details>`).join('')}`;
   }
+
+  /* ---------- 星星奖品：学生用星星换礼物，老师在前台发放 ---------- */
+  const REWARDS = {
+    top: () => `<button class="back" data-go="me">‹</button><h1>星星奖品</h1>`, noTab: true,
+    body: async () => {
+      const admin = isAdmin();
+      const [data, reds] = await Promise.all([API.get('/api/rewards'), API.get('/api/admin/redemptions')]);
+      const pending = reds.list.filter((r) => r.status === 'pending');
+      const done = reds.list.filter((r) => r.status !== 'pending').slice(0, 10);
+      const newForm = admin ? `<div class="card">
+        <div class="section-title mb">添加奖品</div>
+        <div class="row" style="gap:10px">
+          <label class="field grow"><span>奖品名称</span><input id="rw-name" placeholder="例如：精美文具套装"></label>
+          <label class="field" style="width:110px;flex:0 0 auto"><span>需要星星</span><input id="rw-stars" type="number" min="1" inputmode="numeric" value="200"></label>
+        </div>
+        <label class="field"><span>说明（可不填）</span><input id="rw-note" placeholder="例如：到前台领取"></label>
+        <div class="row between">
+          <label class="btn sm ghost" style="display:inline-flex">加照片<input type="file" accept="image/*" id="rw-img" hidden></label>
+          <span class="muted small grow" id="rw-imgtip">家长和孩子看得见照片会更有动力</span>
+          <button class="btn sm" data-act="addReward">添加</button>
+        </div>
+      </div>` : '';
+      return `${newForm}
+      <div class="row between mb"><div class="section-title">待发放</div>${pending.length ? `<span class="pill todo">${pending.length} 份</span>` : ''}</div>
+      ${pending.length ? pending.map((r) => `<div class="card tight">
+        <div class="row between"><div><b>${esc(r.studentName)}</b> 换 ${esc(r.rewardName)}</div><span class="pill blue">${r.stars} 星</span></div>
+        <div class="muted small mt">${fmtDate(r.createdAt)}</div>
+        <div class="row mt" style="gap:8px">
+          <button class="btn sm grow" data-act="redDone" data-id="${r.id}">已发放</button>
+          <button class="btn sm danger" data-act="redCancel" data-id="${r.id}" data-name="${esc(r.studentName)}">取消退星</button>
+        </div>
+      </div>`).join('') : '<div class="card tight muted small">还没有人兑换</div>'}
+      ${admin ? `<div class="section-title mb mt">奖品（${data.rewards.length}）</div>
+      ${data.rewards.map((r) => `<div class="card reward ${r.active ? '' : 'off'}">
+        <div class="row" style="gap:12px">
+          ${r.image ? `<img class="rw-pic" src="${esc(r.image.url)}" alt="">` : '<div class="rw-pic none">无图</div>'}
+          <div class="grow"><div class="strong">${esc(r.name)}${r.active ? '' : ' <span class="pill">已下架</span>'}</div>
+            <div class="muted small">${r.stars} 颗星 · 已兑换 ${r.redeemed || 0} 次${r.note ? ' · ' + esc(r.note) : ''}</div></div>
+        </div>
+        <div class="row mt" style="gap:8px;flex-wrap:wrap">
+          <button class="btn sm ghost" data-act="editReward" data-id="${r.id}" data-name="${esc(r.name)}" data-stars="${r.stars}">改名称 / 星数</button>
+          <button class="btn sm grey" data-act="toggleReward" data-id="${r.id}" data-on="${r.active ? 1 : 0}">${r.active ? '下架' : '上架'}</button>
+          ${r.redeemed ? '' : `<button class="btn sm danger" data-act="delReward" data-id="${r.id}" data-name="${esc(r.name)}">删除</button>`}
+        </div>
+      </div>`).join('')}` : ''}
+      ${done.length ? `<div class="section-title mb mt">最近处理</div>
+        ${done.map((r) => `<div class="card tight"><div class="row between"><span>${esc(r.studentName)} · ${esc(r.rewardName)}</span>
+          <span class="pill ${r.status === 'done' ? 'ok' : ''}">${r.status === 'done' ? '已发放' : '已取消'}</span></div></div>`).join('')}` : ''}`;
+    },
+  };
 
   /* ---------- 咨询：家长预约试听 ---------- */
   const LEAD_ST = [['new', '新咨询'], ['contacted', '已联系'], ['enrolled', '已报名'], ['invalid', '无效']];
@@ -421,6 +509,9 @@
         <a class="btn sm ghost" href="admin.html" target="_blank">打开内容后台</a></div></div>`
         : `<div class="card"><div class="section-title mb">我带的班</div>
         <div class="muted small">${st.classes} 个班。要加新班或改科目，在「班级」页操作；教材内容和家长咨询由负责人管理。</div></div>`}
+      <div class="card"><div class="row between mb"><div class="section-title">星星奖品</div>
+          <button class="btn sm" data-go="rewards">${admin ? '管理' : '发放'}</button></div>
+        <div class="muted small">学生攒够星星在手机上兑换，${admin ? '你在这里设置奖品，' : ''}孩子来前台领时点一下「已发放」。</div></div>
       <div class="card"><div class="row between"><span>切换账号</span><button class="btn sm grey" data-act="logout">退出登录</button></div></div>`;
     },
   };
@@ -454,6 +545,100 @@
         </div>`).join('')}`;
     },
   };
+
+  /* ---------- 自动出小学计算题 ----------
+   * 在手机上一道道敲计算题太慢，这里按范围一次生成，生成后每道题都还能改。
+   */
+  const MATH_KINDS = [
+    ['add20', '20 以内加减法'], ['add100', '100 以内加减法'], ['mul9', '表内乘除法（九九表）'],
+    ['mul2x1', '两位数 × 一位数'], ['div', '除法（无余数）'], ['mix', '混合：加减乘除'],
+  ];
+  const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+
+  function makeMathQuestion(kind, score) {
+    let stem, answer;
+    const plus = () => { const a = rnd(1, kind === 'add20' ? 19 : 99), b = rnd(1, (kind === 'add20' ? 20 : 100) - a); return [`${a} + ${b}`, a + b]; };
+    const minus = () => { const a = rnd(2, kind === 'add20' ? 20 : 100), b = rnd(1, a - 1); return [`${a} − ${b}`, a - b]; };
+    const times = () => { const a = rnd(2, 9), b = rnd(2, 9); return [`${a} × ${b}`, a * b]; };
+    const big = () => { const a = rnd(11, 99), b = rnd(2, 9); return [`${a} × ${b}`, a * b]; };
+    const div = () => { const b = rnd(2, 9), r = rnd(2, 9); return [`${b * r} ÷ ${b}`, r]; };
+    const pick = {
+      add20: () => (Math.random() < 0.5 ? plus() : minus()),
+      add100: () => (Math.random() < 0.5 ? plus() : minus()),
+      mul9: () => (Math.random() < 0.5 ? times() : div()),
+      mul2x1: big,
+      div,
+      mix: () => [plus, minus, times, div][rnd(0, 3)](),
+    }[kind] || plus;
+    [stem, answer] = pick();
+    const q = newQ('blank');
+    q.stem = `${stem} = ____`;
+    q.blanks = [String(answer)];
+    q.score = score;
+    return q;
+  }
+
+  function genMathDialog() {
+    const m = document.createElement('div');
+    m.className = 'poster-mask'; m.id = 'mathbox';
+    m.innerHTML = `<div class="poster-sheet" role="dialog" aria-label="自动出计算题">
+        <div class="section-title">自动出计算题</div>
+        <label class="field"><span>题型</span><select id="mg-kind">${MATH_KINDS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select></label>
+        <div class="row" style="gap:10px">
+          <label class="field grow"><span>题数</span><input id="mg-n" type="number" min="1" max="30" value="10" inputmode="numeric"></label>
+          <label class="field grow"><span>每题分值</span><input id="mg-score" type="number" min="1" max="20" value="5" inputmode="numeric"></label>
+        </div>
+        <div class="muted small">生成的是填空题，学生做完立刻出分。生成后还能逐题修改或删除。</div>
+        <div class="row" style="gap:10px">
+          <button class="btn ghost grow" data-act="closeMath">取消</button>
+          <button class="btn grow" data-act="doGenMath">生成</button>
+        </div>
+      </div>`;
+    m.addEventListener('click', (e) => { if (e.target === m) m.remove(); });
+    document.getElementById('app').appendChild(m);
+  }
+
+  /* ---------- 符号面板：数学符号和音标，点一下插进正在编辑的那一栏 ---------- */
+  const SYMBOLS = {
+    数学: ['＋', '−', '×', '÷', '=', '≠', '＜', '＞', '≤', '≥', '≈', '±', '½', '⅓', '¼', '¾', '²', '³', '√', '∠', '°', '△', '○', 'π', '∵', '∴', '⊥', '∥', '％', '…', '｜｜', '（）'],
+    音标: ['iː', 'ɪ', 'e', 'æ', 'ɑː', 'ɒ', 'ɔː', 'ʊ', 'uː', 'ʌ', 'ɜː', 'ə', 'eɪ', 'aɪ', 'ɔɪ', 'əʊ', 'aʊ', 'ɪə', 'eə', 'ʊə', 'p', 'b', 't', 'd', 'k', 'ɡ', 'f', 'v', 'θ', 'ð', 's', 'z', 'ʃ', 'ʒ', 'h', 'tʃ', 'dʒ', 'tr', 'dr', 'ts', 'dz', 'm', 'n', 'ŋ', 'l', 'r', 'j', 'w', 'ˈ', 'ˌ'],
+  };
+
+  function symbolPanel() {
+    if (!S.lastField || !document.body.contains(S.lastField)) return toast('先点一下要输入的那一栏');
+    const m = document.createElement('div');
+    m.className = 'poster-mask'; m.id = 'symbox';
+    const tabs = Object.keys(SYMBOLS);
+    m.innerHTML = `<div class="poster-sheet" role="dialog" aria-label="插入符号">
+        <div class="seg">${tabs.map((t, i) => `<button class="${i ? '' : 'on'}" data-symtab="${t}">${t}</button>`).join('')}</div>
+        <div class="symgrid" id="symgrid">${SYMBOLS[tabs[0]].map((c) => `<button data-sym="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+        <button class="btn grey block" data-act="closeSym">完成</button>
+      </div>`;
+    m.addEventListener('click', (e) => {
+      if (e.target === m) return m.remove();
+      const tab = e.target.closest('[data-symtab]');
+      if (tab) {
+        [...m.querySelectorAll('[data-symtab]')].forEach((b) => b.classList.toggle('on', b === tab));
+        document.getElementById('symgrid').innerHTML = SYMBOLS[tab.dataset.symtab].map((c) => `<button data-sym="${esc(c)}">${esc(c)}</button>`).join('');
+        return;
+      }
+      const sym = e.target.closest('[data-sym]');
+      if (sym) insertSymbol(sym.dataset.sym);
+    });
+    document.getElementById('app').appendChild(m);
+  }
+
+  /** 插到光标处，并让编辑器同步到 state */
+  function insertSymbol(ch) {
+    const el = S.lastField;
+    if (!el) return;
+    const start = el.selectionStart == null ? el.value.length : el.selectionStart;
+    const end = el.selectionEnd == null ? el.value.length : el.selectionEnd;
+    el.value = el.value.slice(0, start) + ch + el.value.slice(end);
+    const pos = start + ch.length;
+    try { el.setSelectionRange(pos, pos); } catch (e) {}
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
 
   /** 选一位老师（转班时用） */
   function pickStaff(title, list, onPick) {
@@ -492,7 +677,23 @@
     document.getElementById('app').appendChild(m);
   }
 
-  const VIEWS = { login: LOGIN, classes: CLASSES, classform: CLASSFORM, staff: STAFF, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
+  const VIEWS = { login: LOGIN, classes: CLASSES, classform: CLASSFORM, staff: STAFF, rewards: REWARDS, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
+
+  /** 把页面上的评分栏读成一个对象；没打分就返回 null（后端会原样清空） */
+  function readRubric(ri) {
+    if (!document.getElementById(`rb-${ri}-min`)) return undefined;   // 不是作业班，不提交这个字段
+    const out = {};
+    for (const [k] of RUBRIC) {
+      const el = document.getElementById(`rb-${ri}-${k}`);
+      const v = Number(el && el.dataset.val) || 0;
+      if (v) out[k] = v;
+    }
+    const min = Number(document.getElementById(`rb-${ri}-min`).value);
+    if (min > 0) out.minutes = min;
+    const other = document.getElementById(`rb-${ri}-other`).value.trim();
+    if (other) out.other = other;
+    return Object.keys(out).length ? out : null;
+  }
 
   const ACT = {
     async login() {
@@ -647,6 +848,8 @@
     async createQHw(el) {
       const title = document.getElementById('f-title').value.trim();
       if (!title) return toast('请填写作业标题');
+      const kept = S.qs.filter((q) => !isEmptyQ(q));
+      if (kept.length !== S.qs.length) { S.qs = kept; drawQs(); }   // 空白题不发出去
       if (!S.qs.length) return toast('至少出一道题');
       const questions = S.qs.map((q) => ({
         type: q.type, stem: q.stem, stemImageBase64: q.img ? q.img.base64 : undefined,
@@ -668,6 +871,23 @@
       } catch (e) { toast(e.message, 2600); el.disabled = false; el.textContent = '发布作业'; }
     },
     zoom(el) { lightbox(el.dataset.src); },
+    genMath() { genMathDialog(); },
+    closeMath() { const m = document.getElementById('mathbox'); if (m) m.remove(); },
+    doGenMath() {
+      const kind = document.getElementById('mg-kind').value;
+      const n = Math.max(1, Math.min(30, Number(document.getElementById('mg-n').value) || 10));
+      const score = Math.max(1, Math.min(20, Number(document.getElementById('mg-score').value) || 5));
+      S.qs = S.qs.filter((q) => !isEmptyQ(q));          // 进页面时那道空白题让位给生成的题
+      const seen = new Set(S.qs.map((q) => q.stem));
+      for (let i = 0, guard = 0; i < n && guard < n * 20; guard++) {
+        const q = makeMathQuestion(kind, score);
+        if (seen.has(q.stem)) continue;                 // 同一份作业里不出重复的题
+        seen.add(q.stem); S.qs.push(q); i++;
+      }
+      ACT.closeMath(); drawQs(); toast(`已生成 ${n} 道题`);
+    },
+    symbols() { symbolPanel(); },
+    closeSym() { const m = document.getElementById('symbox'); if (m) m.remove(); },
     async doGrade(el) {
       const ri = Number(el.dataset.ri), r = S.rev.rows[ri];
       const scores = [];
@@ -682,10 +902,52 @@
       el.disabled = true;
       try {
         const res = await API.post(`/api/submissions/${r.submissionId}/grade`, {
-          scores, reviewText: document.getElementById('rv-' + ri).value.trim(), excellent: document.getElementById('ex-' + ri).checked,
+          scores, reviewText: document.getElementById('rv-' + ri).value.trim(),
+          excellent: document.getElementById('ex-' + ri).checked, rubric: readRubric(ri),
         });
         toast(`批改完成：${fmtNum(res.score)} / ${fmtNum(res.maxScore)} 分`); render();
       } catch (e) { toast(e.message); el.disabled = false; }
+    },
+    async addReward(el) {
+      const name = document.getElementById('rw-name').value.trim();
+      const stars = Number(document.getElementById('rw-stars').value);
+      if (!name) return toast('请填写奖品名称');
+      if (!(stars > 0)) return toast('请填写需要多少颗星');
+      const f = document.getElementById('rw-img').files[0];
+      el.disabled = true;
+      try {
+        const body = { name, stars, note: document.getElementById('rw-note').value.trim() };
+        if (f) body.imageBase64 = (await compressImage(f, 900, 0.8)).base64;
+        await API.post('/api/admin/rewards', body);
+        toast('已添加'); render();
+      } catch (e) { toast(e.message, 2600); el.disabled = false; }
+    },
+    async editReward(el) {
+      const name = (prompt('奖品名称', el.dataset.name) || '').trim();
+      if (!name) return;
+      const stars = Number(prompt('需要多少颗星？', el.dataset.stars));
+      if (!(stars > 0)) return toast('星数不对');
+      try { await API.put('/api/admin/rewards/' + el.dataset.id, { name, stars }); toast('已保存'); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async toggleReward(el) {
+      const on = el.dataset.on === '1';
+      try { await API.put('/api/admin/rewards/' + el.dataset.id, { active: !on }); toast(on ? '已下架' : '已上架'); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async delReward(el) {
+      if (!confirm(`删除奖品「${el.dataset.name}」？`)) return;
+      try { await API.del('/api/admin/rewards/' + el.dataset.id); toast('已删除'); render(); }
+      catch (e) { toast(e.message, 2600); }
+    },
+    async redDone(el) {
+      try { await API.post(`/api/admin/redemptions/${el.dataset.id}/done`); toast('已发放'); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async redCancel(el) {
+      if (!confirm(`取消这次兑换？星星会退回给 ${el.dataset.name}`)) return;
+      try { const r = await API.post(`/api/admin/redemptions/${el.dataset.id}/cancel`); toast(`已取消，退回 ${r.refunded} 颗星`); render(); }
+      catch (e) { toast(e.message); }
     },
     async leadDel(el) {
       if (!confirm('删除这条预约？删除后找不回来')) return;
@@ -693,6 +955,12 @@
       catch (e) { toast(e.message); }
     },
     playRec(el) { const u = el.dataset.url; if (!u) return toast('没有录音'); Clip.play(u, el); },
+    setRubStar(el, ev) {
+      const box = el.getBoundingClientRect();
+      const n = Math.max(1, Math.min(5, Math.ceil((ev.clientX - box.left) / (box.width / 5))));
+      el.dataset.val = n;
+      el.innerHTML = starStr(n);
+    },
     setStar(el, ev) {
       const box = el.getBoundingClientRect();
       const n = Math.max(1, Math.min(5, Math.ceil((ev.clientX - box.left) / (box.width / 5))));
@@ -706,7 +974,8 @@
       const stars = Number(st.dataset.val || r.stars || 5);
       try {
         await API.post(`/api/submissions/${r.submissionId}/review`,
-          { stars, reviewText: document.getElementById('rv-' + ri).value.trim(), excellent: document.getElementById('ex-' + ri).checked });
+          { stars, reviewText: document.getElementById('rv-' + ri).value.trim(),
+            excellent: document.getElementById('ex-' + ri).checked, rubric: readRubric(ri) });
         toast('批改完成'); render();
       } catch (e) { toast(e.message); }
     },

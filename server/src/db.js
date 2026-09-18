@@ -266,6 +266,8 @@ addColumn('homeworks', 'kind', "TEXT DEFAULT 'follow_read'");   // follow_read �
 addColumn('submissions', 'score', 'REAL');
 addColumn('submissions', 'max_score', 'REAL');
 addColumn('submissions', 'excellent', 'INTEGER DEFAULT 0');
+// 作业班的评分栏：书写、坐姿、学习态度、作业时长、作业效率、其他，存成 JSON
+addColumn('submissions', 'rubric', 'TEXT');
 
 const SUBJECTS = [['en', '英语', 'sky', 1], ['zh', '语文', 'coral', 2], ['math', '数学', 'mint', 3],
   ['calli', '书法', 'star', 4], ['hwclass', '作业班', 'ink', 5]];
@@ -297,6 +299,32 @@ for (const [code, list] of Object.entries(COURSES)) {
   const sid = subjIdOf.get(code);
   if (sid) list.forEach((name, i) => insCourse.run(sid.id, name, i + 1));
 }
+
+/* 星星奖品：攒够星星换实物礼物，老师在后台发放 */
+db.exec(`
+CREATE TABLE IF NOT EXISTS rewards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  stars INTEGER NOT NULL,
+  image_id INTEGER REFERENCES assets(id),
+  note TEXT,
+  sort INTEGER DEFAULT 0,
+  active INTEGER DEFAULT 1,
+  created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS redemptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  reward_id INTEGER REFERENCES rewards(id),
+  student_id INTEGER NOT NULL REFERENCES users(id),
+  reward_name TEXT,                  -- 兑换当时的名字和星数，奖品以后改了也不影响记录
+  stars INTEGER,
+  status TEXT DEFAULT 'pending',     -- pending 待领取 | done 已发放 | canceled 已取消（星星退回）
+  created_at TEXT,
+  done_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_redemption_status ON redemptions(status, id);
+CREATE INDEX IF NOT EXISTS idx_redemption_student ON redemptions(student_id, id);
+`);
 
 // 家长在预约表单里写的话（和老师自己的跟进备注 note 分开存）
 addColumn('leads', 'message', 'TEXT');

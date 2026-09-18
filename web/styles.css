@@ -532,3 +532,29 @@ div.field > span{display:block;font-size:13px;font-weight:700;color:var(--text-2
 .card.cls.ink{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--ink)}
 .group-title.ink::before{background:var(--ink)}
 .lead-msg{margin-top:6px;background:var(--wash);border-radius:12px;padding:8px 10px;font-size:14px;line-height:1.55}
+
+/* ---------- 作业班评分栏 ---------- */
+.rubric{margin-top:12px;padding:12px;background:var(--wash);border-radius:14px}
+.rub-row{padding:4px 0}
+.rub-row .stars{font-size:19px}
+.rubric .mins{width:92px;padding:8px 10px;text-align:center}
+.rubric input:not(.mins){margin-top:8px;background:var(--paper)}
+.symgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;max-height:44vh;overflow:auto}
+.symgrid button{border:2px solid var(--line);background:var(--paper);border-radius:10px;padding:10px 0;
+  font:600 17px var(--sans);color:var(--ink-deep);cursor:pointer}
+.symgrid button:active{background:var(--wash)}
+
+/* ---------- 星星奖品 ---------- */
+.reward.off{opacity:.55}
+.rw-pic{width:64px;height:64px;border-radius:12px;object-fit:cover;background:var(--wash);flex:0 0 auto}
+.rw-pic.none{display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text-3)}
+.rw-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.rw-row:first-child{border-top:0}
+.rw-row img,.rw-none{width:52px;height:52px;border-radius:12px;object-fit:cover;background:var(--wash);flex:0 0 auto}
+.rw-none{display:flex;align-items:center;justify-content:center;color:var(--star)}
+.rw-none svg{width:26px;height:26px}
+.rw-bar{margin-top:6px;height:6px;border-radius:3px;background:var(--wash-2);overflow:hidden}
+.rw-bar i{display:block;height:100%;background:var(--star)}
+.nowrap{white-space:nowrap}
+.rubric-view{margin-top:10px;padding:10px 12px;background:var(--wash);border-radius:14px}
+.rubric-view .stars{font-size:17px}

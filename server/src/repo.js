@@ -72,7 +72,7 @@ const toSubmission = (r) => r && ({
   id: r.id, homeworkId: r.homework_id, studentId: r.student_id, status: r.status,
   submittedAt: r.submitted_at, elapsedSec: r.elapsed_sec, stars: r.stars,
   reviewText: r.review_text, reviewedAt: r.reviewed_at,
-  score: r.score, maxScore: r.max_score, excellent: !!r.excellent,
+  score: r.score, maxScore: r.max_score, excellent: !!r.excellent, rubric: parseJSON(r.rubric, null),
 });
 const toSubject = (r) => r && ({ id: r.id, code: r.code, name: r.name, color: r.color, sort: r.sort });
 const parseJSON = (t, d) => { try { return t == null || t === '' ? d : JSON.parse(t); } catch { return d; } };
@@ -457,6 +457,10 @@ const submissions = {
       .run(score, maxScore, status, stars == null ? null : num(stars), status, now(), num(id));
   },
   async setExcellent(id, excellent) { q('UPDATE submissions SET excellent=? WHERE id=?').run(excellent ? 1 : 0, num(id)); },
+  /** 作业班的评分栏（书写、坐姿、态度、效率、用时） */
+  async setRubric(id, rubric) {
+    q('UPDATE submissions SET rubric=? WHERE id=?').run(rubric ? JSON.stringify(rubric) : null, num(id));
+  },
   async count() { return count('SELECT COUNT(*) n FROM submissions'); },
 };
 
@@ -493,6 +497,61 @@ const checkins = {
 
 
 /* ---------- 科目 ---------- */
+const toReward = (r) => r && ({ id: r.id, name: r.name, stars: r.stars, imageId: r.image_id,
+  note: r.note || '', sort: r.sort, active: !!r.active, createdAt: r.created_at });
+const toRedemption = (r) => r && ({ id: r.id, rewardId: r.reward_id, studentId: r.student_id,
+  rewardName: r.reward_name, stars: r.stars, status: r.status, createdAt: r.created_at, doneAt: r.done_at });
+
+const rewards = {
+  async all() { return q('SELECT * FROM rewards ORDER BY sort, stars, id').all().map(toReward); },
+  async listActive() { return q('SELECT * FROM rewards WHERE active=1 ORDER BY sort, stars, id').all().map(toReward); },
+  async byId(id) { return toReward(q('SELECT * FROM rewards WHERE id=?').get(num(id))); },
+  async create({ name, stars, imageId, note, sort }) {
+    const r = q('INSERT INTO rewards (name, stars, image_id, note, sort, active, created_at) VALUES (?,?,?,?,?,1,?)')
+      .run(name, num(stars), imageId ? num(imageId) : null, note || '', num(sort) || 0, now());
+    return rewards.byId(Number(r.lastInsertRowid));
+  },
+  async update(id, { name, stars, note, active, imageId }) {
+    const cur = q('SELECT * FROM rewards WHERE id=?').get(num(id));
+    if (!cur) return null;
+    q('UPDATE rewards SET name=?, stars=?, note=?, active=?, image_id=? WHERE id=?').run(
+      name == null ? cur.name : name,
+      stars == null ? cur.stars : num(stars),
+      note == null ? cur.note : note,
+      active == null ? cur.active : (active ? 1 : 0),
+      imageId === undefined ? cur.image_id : (imageId ? num(imageId) : null),
+      num(id));
+    return rewards.byId(id);
+  },
+  async remove(id) { q('DELETE FROM rewards WHERE id=?').run(num(id)); },
+  async countRedemptions(id) { return count('SELECT COUNT(*) n FROM redemptions WHERE reward_id=?', num(id)); },
+};
+
+const redemptions = {
+  async byId(id) { return toRedemption(q('SELECT * FROM redemptions WHERE id=?').get(num(id))); },
+  async create({ rewardId, studentId, rewardName, stars }) {
+    const r = q(`INSERT INTO redemptions (reward_id, student_id, reward_name, stars, status, created_at)
+                 VALUES (?,?,?,?,'pending',?)`).run(num(rewardId), num(studentId), rewardName, num(stars), now());
+    return redemptions.byId(Number(r.lastInsertRowid));
+  },
+  async byStudent(studentId, limit = 20) {
+    return q(`SELECT * FROM redemptions WHERE student_id=? ORDER BY id DESC LIMIT ${num(limit)}`)
+      .all(num(studentId)).map(toRedemption);
+  },
+  async list(status, limit = 100) {
+    const rows = status
+      ? q(`SELECT r.*, u.name AS student_name FROM redemptions r JOIN users u ON u.id=r.student_id
+           WHERE r.status=? ORDER BY r.id DESC LIMIT ${num(limit)}`).all(status)
+      : q(`SELECT r.*, u.name AS student_name FROM redemptions r JOIN users u ON u.id=r.student_id
+           ORDER BY r.id DESC LIMIT ${num(limit)}`).all();
+    return rows.map((r) => ({ ...toRedemption(r), studentName: r.student_name }));
+  },
+  async countPending() { return count(`SELECT COUNT(*) n FROM redemptions WHERE status='pending'`); },
+  async setStatus(id, status) {
+    q('UPDATE redemptions SET status=?, done_at=? WHERE id=?').run(status, now(), num(id));
+  },
+};
+
 const courses = {
   async all() { return q('SELECT * FROM courses WHERE active=1 ORDER BY subject_id, sort, id').all().map(toCourse); },
   async bySubject(subjectId) {
@@ -641,7 +700,7 @@ const leads = {
 };
 
 module.exports = {
-  users, sessions, classes, books, lessons, pages, hotspots, assets, courses,
+  users, sessions, classes, books, lessons, pages, hotspots, assets, courses, rewards, redemptions,
   homeworks, submissions, submissionItems, checkins,
   subjects, questions, answers, shares, leads,
 };

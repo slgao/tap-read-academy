@@ -391,6 +391,53 @@ const TAG = '__e2e_' + Date.now();
   const afterDel = await call("GET", "/api/me", null, S.token);
   check('删班后学生不再在这些班里', !afterDel.classes.some((x) => [mathCls.id, calliCls.id].includes(x.id)), afterDel.classes.map((x) => x.name).join('、'));
 
+  log('\n[10] 作业班评分栏与星星奖品');
+  const hwSub = (await call('GET', '/api/subjects', null, T.token)).subjects.find((x) => x.code === 'hwclass');
+  const hwCls = await call('POST', '/api/classes', { subjectId: hwSub.id, gradeBand: '三四年级', name: TAG + ' 作业班' }, T.token);
+  await call('POST', '/api/classes/join', { inviteCode: hwCls.inviteCode }, S.token);
+  const hwHw = await call('POST', '/api/homeworks/questions', { classId: hwCls.id, title: TAG + ' 今日作业',
+    questions: [{ type: 'photo', score: 10, stem: '把今天的作业拍照上传' }] }, T.token);
+  const hwView = await call('GET', `/api/homeworks/${hwHw.id}`, null, S.token);
+  const hwRes = await call('POST', `/api/homeworks/${hwHw.id}/answers`, { answers: [{ questionId: hwView.questions[0].id, photos: [JPG] }] }, S.token);
+  const hwSubs = await call('GET', `/api/homeworks/${hwHw.id}/submissions`, null, T.token);
+  const hwRow = hwSubs.rows.find((r) => r.submissionId);
+  await call('POST', `/api/submissions/${hwRow.submissionId}/grade`, {
+    scores: [{ answerId: hwRow.answers[0].id, score: 9 }], reviewText: '今天很专心',
+    rubric: { write: 5, posture: 4, attitude: 5, efficiency: 4, minutes: 45, other: '主动问了三个问题', bogus: 9 },
+  }, T.token);
+  const hwAfter = await call('GET', `/api/homeworks/${hwHw.id}`, null, S.token);
+  const rb = hwAfter.mySubmission.rubric;
+  check('作业班评分栏：学生能看到书写/坐姿/态度/效率和用时', rb.write === 5 && rb.posture === 4 && rb.attitude === 5
+    && rb.efficiency === 4 && rb.minutes === 45 && rb.other === '主动问了三个问题' && rb.bogus === undefined, JSON.stringify(rb));
+  const badRub = await call('POST', `/api/submissions/${hwRow.submissionId}/grade`, {
+    scores: [{ answerId: hwRow.answers[0].id, score: 9 }], rubric: { write: 9, minutes: 9999 } }, T.token);
+  const rb2 = (await call('GET', `/api/homeworks/${hwHw.id}`, null, S.token)).mySubmission.rubric;
+  check('评分栏超范围的值被丢掉', rb2 === null && badRub.score === 9, JSON.stringify(rb2));
+
+  // 星星奖品
+  const before = (await call('GET', '/api/rewards', null, S.token)).stars;
+  const reward = await call('POST', '/api/admin/rewards', { name: TAG + ' 文具套装', stars: 20, note: '前台领取' }, T.token);
+  const tooBig = await call('POST', '/api/admin/rewards', { name: TAG + ' 自行车', stars: before + 500 }, T.token);
+  const wall = await call('GET', '/api/rewards', null, S.token);
+  const myRw = wall.rewards.find((r) => r.id === reward.id);
+  const far = wall.rewards.find((r) => r.id === tooBig.id);
+  check('奖品墙显示还差多少颗星', myRw.canRedeem === true && far.canRedeem === false && far.need > 0, `${myRw.name} 可换；${far.name} 还差 ${far.need}`);
+  const cantAfford = await expectFail('POST', `/api/rewards/${tooBig.id}/redeem`, {}, S.token);
+  check('星星不够不能兑换', /还差/.test(cantAfford || ''), cantAfford);
+  const red = await call('POST', `/api/rewards/${reward.id}/redeem`, {}, S.token);
+  check('兑换后立刻扣星', red.left === before - 20, `${before} → ${red.left}`);
+  const pendings = await call('GET', '/api/admin/redemptions?status=pending', null, T.token);
+  check('老师看到待发放', pendings.list.some((x) => x.id === red.id && x.studentName === '李小明'), `${pendings.pending} 份待发放`);
+  await call('POST', `/api/admin/redemptions/${red.id}/cancel`, null, T.token);
+  check('取消兑换退回星星', (await call('GET', '/api/rewards', null, S.token)).stars === before, '');
+  const stuAdmin = await expectFail('POST', '/api/admin/rewards', { name: 'x', stars: 1 }, S.token);
+  check('学生不能自己加奖品', /无权限/.test(stuAdmin || ''), stuAdmin);
+
+  // 清理本段
+  await call('DELETE', `/api/homeworks/${hwHw.id}`, null, T.token);
+  await call('DELETE', `/api/classes/${hwCls.id}`, null, T.token);
+  for (const rw of [reward, tooBig]) await call('DELETE', `/api/admin/rewards/${rw.id}`, null, T.token).catch(() => {});
+
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);
   check('有作业时拒绝删教材', /还有作业/.test(guarded || ''), guarded);

@@ -391,7 +391,8 @@
           <div class="row between"><span class="muted small">${esc(hw.className)} · ${hw.itemCount} 句</span>
           <span class="pill ${done ? 'ok' : hw.status === 'submitted' ? 'warn' : 'todo'}">${done ? '已批改' : hw.status === 'submitted' ? '已提交' : '待完成'}</span></div>
           ${hw.note ? `<div class="mt small">老师说：${esc(hw.note)}</div>` : ''}
-          ${done ? `<div class="hr"></div><div class="row" style="gap:8px"><span class="stars">${starStr(hw.stars)}</span><span class="small">${esc(hw.reviewText || '')}</span></div>` : ''}
+          ${done ? `<div class="hr"></div><div class="row" style="gap:8px"><span class="stars">${starStr(hw.stars)}</span><span class="small">${esc(hw.reviewText || '')}</span></div>
+            ${rubricView(hw.mySubmission && hw.mySubmission.rubric)}` : ''}
           ${done && hw.excellent ? `<div class="hr"></div><div class="row between"><span class="strong">被评为优秀作业</span><button class="btn sm star" data-act="shareOpen" data-type="praise">生成喜报</button></div>` : ''}
         </div>
         <div class="row between mb">
@@ -418,6 +419,19 @@
   }
 
 
+  /** 作业班的评分栏（老师打的） */
+  const RUBRIC_NAMES = { write: '书写', posture: '坐姿', attitude: '学习态度', efficiency: '作业效率' };
+  function rubricView(rb) {
+    if (!rb) return '';
+    const rows = Object.keys(RUBRIC_NAMES).filter((k) => rb[k]);
+    if (!rows.length && !rb.minutes && !rb.other) return '';
+    return `<div class="rubric-view">
+      ${rows.map((k) => `<div class="row between"><span class="muted small">${RUBRIC_NAMES[k]}</span><span class="stars">${starStr(rb[k])}</span></div>`).join('')}
+      ${rb.minutes ? `<div class="row between"><span class="muted small">作业时长</span><span class="strong">${rb.minutes} 分钟</span></div>` : ''}
+      ${rb.other ? `<div class="muted small mt">${esc(rb.other)}</div>` : ''}
+    </div>`;
+  }
+
   /* ---------- 题目作业 ---------- */
   function questionDetail(hw) {
     const sub = hw.mySubmission;
@@ -442,6 +456,7 @@
             <span class="stars">${starStr(sub.stars)}</span></div>
           ${sub.excellent ? '<div class="seal-ex" aria-label="优秀作业">优</div>' : ''}
         </div>
+        ${rubricView(sub.rubric)}
         ${sub.reviewText ? `<div class="teacher-say"><b>老师说</b>${esc(sub.reviewText)}</div>` : ''}
         ${sub.excellent || (calli && photo) ? `<div class="row mt" style="gap:8px">
           ${sub.excellent ? '<button class="btn sm star grow" data-act="shareOpen" data-type="praise">生成喜报</button>' : ''}
@@ -575,11 +590,15 @@
 
   function posterFooter(ctx, W, title, link) {
     ctx.fillStyle = LINE; ctx.fillRect(80, 1240, W - 160, 2);
-    ctx.fillStyle = INK_DEEP; ctx.font = `700 40px ${SERIF}`; ctx.textAlign = 'left';
-    ctx.fillText(title, 80, 1330);
+    ctx.fillStyle = INK_DEEP; ctx.font = `700 38px ${SERIF}`; ctx.textAlign = 'left';
+    ctx.fillText(title, 80, 1318);
+    ctx.fillStyle = INK; ctx.font = `400 26px ${SERIF}`;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '2px';
+    ctx.fillText('成为孩子期待的一堂课', 80, 1362);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
     const d = new Date();
-    ctx.fillStyle = TEXT3; ctx.font = `400 24px ${SANS}`;
-    ctx.fillText(`${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`, 80, 1378);
+    ctx.fillStyle = TEXT3; ctx.font = `400 22px ${SANS}`;
+    ctx.fillText(`${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`, 80, 1400);
     drawQR(ctx, link, W - 80 - 150, 1262, 150);
   }
 
@@ -728,6 +747,11 @@
           </div></div>
         <div class="card"><div class="section-title mb">近 4 周打卡</div><div class="calendar">${cells.join('')}</div>
           <div class="muted small mt">当天学习满 ${Math.max(1, Math.round(sum.needSeconds / 60))} 分钟就盖一个印</div></div>
+        <div class="card" id="rw-card"><div class="row between mb"><div class="section-title">星星奖品</div>
+            <span class="star-pill">${ic('star')}<span>${sum.stars}</span></span></div>
+          <div class="muted small">攒够星星就能换礼物，换好了去前台找老师领。</div>
+          <div id="rw-list" class="mt"><div class="muted small">加载中…</div></div>
+        </div>
         <div class="card"><div class="row between mb"><div class="section-title">我的班级</div>
             <button class="btn sm ghost" data-act="joinClass">+ 加入班级</button></div>
           ${me.classes.map((c) => `<div class="class-row">${subjTag(c.subject)}<span class="grow ellip">${esc(c.name)}</span>${c.gradeBand ? `<span class="muted small">${esc(c.gradeBand)}</span>` : ''}</div>`).join('')
@@ -746,7 +770,31 @@
         </div>
         <div class="card"><div class="row between"><span>切换账号</span><button class="btn sm grey" data-act="logout">退出登录</button></div></div>`;
     },
+    after: () => { drawRewards(); },
   };
+
+  /** 奖品墙：显示进度，够了才能点兑换 */
+  async function drawRewards() {
+    const box = document.getElementById('rw-list');
+    if (!box) return;
+    try {
+      const d = await API.get('/api/rewards');
+      const pending = d.mine.filter((x) => x.status === 'pending');
+      box.innerHTML = `${d.rewards.length ? d.rewards.map((r) => `
+        <div class="rw-row">
+          ${r.image ? `<img src="${esc(r.image.url)}" alt="">` : `<div class="rw-none">${ic('star')}</div>`}
+          <div class="grow">
+            <div class="strong">${esc(r.name)}</div>
+            <div class="muted small">${r.stars} 颗星${r.note ? ' · ' + esc(r.note) : ''}</div>
+            <div class="rw-bar"><i style="width:${Math.min(100, Math.round((d.stars / r.stars) * 100))}%"></i></div>
+          </div>
+          ${r.canRedeem
+            ? `<button class="btn sm star" data-act="redeem" data-id="${r.id}" data-name="${esc(r.name)}" data-stars="${r.stars}">兑换</button>`
+            : `<span class="muted small nowrap">还差 ${r.need}</span>`}
+        </div>`).join('') : '<div class="muted small">老师还没有上架奖品</div>'}
+        ${pending.length ? `<div class="muted small mt">已兑换待领取：${pending.map((x) => esc(x.rewardName)).join('、')}（去前台找老师领）</div>` : ''}`;
+    } catch (e) { box.innerHTML = `<div class="muted small">${esc(e.message)}</div>`; }
+  }
 
   /* ---------- 听力模式 ----------
    * 整课音频连续播放（不按句切片），靠时间轴判断当前在哪一句。
@@ -1031,10 +1079,14 @@
     // 底部：二维码
     ctx.fillStyle = LINE; ctx.fillRect(80, 1240, W - 160, 2);
     ctx.fillStyle = INK_DEEP; ctx.font = `700 40px ${SERIF}`; ctx.textAlign = 'left';
-    ctx.fillText('扫码，和我一起读', 80, 1330);
+    ctx.fillText('扫码，和我一起学习', 80, 1318);
+    ctx.fillStyle = INK; ctx.font = `400 27px ${SERIF}`;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '2px';
+    ctx.fillText('成为孩子期待的一堂课', 80, 1362);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
     const d = new Date();
-    ctx.fillStyle = TEXT3; ctx.font = `400 24px ${SANS}`;
-    ctx.fillText(`${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`, 80, 1378);
+    ctx.fillStyle = TEXT3; ctx.font = `400 22px ${SANS}`;
+    ctx.fillText(`${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`, 80, 1400);
     if (typeof window.qrcode === 'function') {
       const qr = window.qrcode(0, 'M');
       qr.addData(location.origin + location.pathname.replace(/[^/]*$/, ''));
@@ -1114,6 +1166,15 @@
       catch (e) { toast(e.message); }
     },
     pickSubj(el) { S.subj = el.dataset.code; render(); },
+    async redeem(el) {
+      if (!confirm(`用 ${el.dataset.stars} 颗星换「${el.dataset.name}」？换了之后星星会扣掉，去前台找老师领。`)) return;
+      el.disabled = true;
+      try {
+        const r = await API.post(`/api/rewards/${el.dataset.id}/redeem`);
+        celebrate({ mark: '换', label: esc(r.name), title: '换好啦', sub: '去前台找老师领奖品', gain: 0 });
+        render();
+      } catch (e) { toast(e.message, 2600); el.disabled = false; }
+    },
     zoom(el) { lightbox(el.dataset.src); },
     qaPick(el) {
       const q = S.hw.questions.find((x) => String(x.id) === el.dataset.q), k = Number(el.dataset.k);

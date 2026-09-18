@@ -79,6 +79,25 @@ function decodeImage(base64, maxBytes = 3 * 1024 * 1024) {
 
 const subjectView = (x) => x && { id: x.id, code: x.code, name: x.name, color: x.color };
 
+/* 作业班的评分栏：四项打星 + 作业时长 + 一句话 */
+const RUBRIC_ITEMS = [
+  { key: 'write', name: '书写' }, { key: 'posture', name: '坐姿' },
+  { key: 'attitude', name: '学习态度' }, { key: 'efficiency', name: '作业效率' },
+];
+function cleanRubric(x) {
+  if (!x || typeof x !== 'object') return null;
+  const out = {};
+  for (const it of RUBRIC_ITEMS) {
+    const v = Number(x[it.key]);
+    if (v >= 1 && v <= 5) out[it.key] = Math.round(v);
+  }
+  const min = Number(x.minutes);
+  if (min > 0 && min <= 600) out.minutes = Math.round(min);
+  const other = String(x.other || '').trim().slice(0, 100);
+  if (other) out.other = other;
+  return Object.keys(out).length ? out : null;
+}
+
 const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, stars: u.stars, streak: u.streak, lastCheckin: u.lastCheckin });
 
 const ROLE_NAME = { admin: '负责人', teacher: '老师' };
@@ -516,7 +535,7 @@ on('GET', '/api/homeworks/:id', async (ctx) => {
       const its = await repo.submissionItems.bySubmission(sub.id);
       const recs = await assetMap(its.map((it) => it.assetId));
       const subItems = its.map((it) => ({ hotspotId: it.hotspotId, audio: recs.get(it.assetId) || null }));
-      out.mySubmission = { id: sub.id, status: sub.status, stars: sub.stars,
+      out.mySubmission = { id: sub.id, status: sub.status, stars: sub.stars, rubric: sub.rubric,
         reviewText: sub.reviewText, submittedAt: sub.submittedAt, items: subItems };
     }
   }
@@ -582,7 +601,8 @@ on('GET', '/api/homeworks/:id/submissions', async (ctx) => {
       const answers = (sub ? answersBySub.get(sub.id) || [] : []).map((a) => answerView(a, assets));
       rows.push({ studentId: m.id, studentName: m.name, status: sub ? sub.status : 'todo', submissionId: sub ? sub.id : null,
         submittedAt: sub ? sub.submittedAt : null, score: sub ? sub.score : null, maxScore: sub ? sub.maxScore : null,
-        stars: sub ? sub.stars : null, reviewText: sub ? sub.reviewText : null, excellent: sub ? sub.excellent : false, answers });
+        stars: sub ? sub.stars : null, reviewText: sub ? sub.reviewText : null, excellent: sub ? sub.excellent : false,
+        rubric: sub ? sub.rubric : null, answers });
     }
     return ok(ctx.res, { homework: await hwBrief(hw, ctx.user), questions, rows });
   }
@@ -609,6 +629,7 @@ on('GET', '/api/homeworks/:id/submissions', async (ctx) => {
       stars: sub ? sub.stars : null,
       reviewText: sub ? sub.reviewText : null,
       excellent: sub ? sub.excellent : false,
+      rubric: sub ? sub.rubric : null,
       items,
     });
   }
@@ -624,6 +645,7 @@ on('POST', '/api/submissions/:id/review', async (ctx) => {
   const first = sub.status !== 'reviewed';
   await repo.submissions.review(sub.id, { stars, reviewText: String(ctx.body.reviewText || '') });
   await repo.submissions.setExcellent(sub.id, !!ctx.body.excellent);
+  if ('rubric' in ctx.body) await repo.submissions.setRubric(sub.id, cleanRubric(ctx.body.rubric));
   if (first) await repo.users.addStars(sub.studentId, stars * 2 + (ctx.body.excellent ? 10 : 0));   // 重复批改不重复加星
   ok(ctx.res, { ok: true });
 }, { roles: ['teacher', 'admin'] });
@@ -897,7 +919,7 @@ async function questionHomeworkDetail(hw, user) {
     out.questions.push(view);
   }
   if (sub) out.mySubmission = { id: sub.id, status: sub.status, score: sub.score, maxScore: sub.maxScore, stars: sub.stars,
-    reviewText: sub.reviewText, excellent: sub.excellent, submittedAt: sub.submittedAt };
+    reviewText: sub.reviewText, excellent: sub.excellent, rubric: sub.rubric, submittedAt: sub.submittedAt };
   return out;
 }
 
@@ -1006,8 +1028,98 @@ on('POST', '/api/submissions/:id/grade', async (ctx) => {
   await repo.submissions.setScore(sub.id, { score, maxScore, status: 'reviewed', stars });
   await repo.submissions.review(sub.id, { stars, reviewText: String(ctx.body.reviewText || '').slice(0, 500) });
   await repo.submissions.setExcellent(sub.id, !!ctx.body.excellent);
+  if ('rubric' in ctx.body) await repo.submissions.setRubric(sub.id, cleanRubric(ctx.body.rubric));
   if (first) await repo.users.addStars(sub.studentId, stars * 2 + (ctx.body.excellent ? 10 : 0));
   ok(ctx.res, { score, maxScore, stars });
+}, { roles: ['teacher', 'admin'] });
+
+/* ================= 星星奖品：攒够星星换礼物 ================= */
+async function rewardView(r) {
+  return { id: r.id, name: r.name, stars: r.stars, note: r.note, active: r.active, image: await assetView(r.imageId) };
+}
+
+/** 学生看到的奖品墙：自己有多少星、还差多少、已经换过什么 */
+on('GET', '/api/rewards', async (ctx) => {
+  const list = ctx.user.role === 'student' ? await repo.rewards.listActive() : await repo.rewards.all();
+  const out = [];
+  for (const r of list) {
+    const v = await rewardView(r);
+    if (ctx.user.role === 'student') { v.need = Math.max(0, r.stars - ctx.user.stars); v.canRedeem = v.need === 0; }
+    else v.redeemed = await repo.rewards.countRedemptions(r.id);
+    out.push(v);
+  }
+  ok(ctx.res, { stars: ctx.user.stars, rewards: out, mine: ctx.user.role === 'student' ? await repo.redemptions.byStudent(ctx.user.id) : [] });
+});
+
+on('POST', '/api/rewards/:id/redeem', async (ctx) => {
+  const r = await repo.rewards.byId(ctx.params.id);
+  if (!r || !r.active) return fail(ctx.res, 3014, '这个奖品已经下架了');
+  const me = await repo.users.byId(ctx.user.id);              // 重新读一次，避免用旧的星数
+  if (me.stars < r.stars) return fail(ctx.res, 3014, `还差 ${r.stars - me.stars} 颗星`);
+  await repo.users.addStars(me.id, -r.stars);                 // 先扣星，老师取消时会退回
+  const red = await repo.redemptions.create({ rewardId: r.id, studentId: me.id, rewardName: r.name, stars: r.stars });
+  ok(ctx.res, { id: red.id, left: me.stars - r.stars, name: r.name });
+}, { roles: ['student'] });
+
+on('POST', '/api/admin/rewards', async (ctx) => {
+  const name = String(ctx.body.name || '').trim().slice(0, 30);
+  const stars = Number(ctx.body.stars);
+  if (!name) return fail(ctx.res, 1001, '请填写奖品名称');
+  if (!(stars > 0 && stars <= 100000)) return fail(ctx.res, 1001, '请填写需要多少颗星');
+  let imageId = null;
+  if (ctx.body.imageBase64) {
+    const img = decodeImage(ctx.body.imageBase64);
+    if (img.error) return fail(ctx.res, 1001, '奖品照片：' + img.error);
+    const { asset } = await putAssetBuf('photo', img.buf, img.ext, { mime: 'image/' + img.ext });
+    imageId = asset.id;
+  }
+  const r = await repo.rewards.create({ name, stars, imageId, note: String(ctx.body.note || '').slice(0, 100), sort: Number(ctx.body.sort) || 0 });
+  ok(ctx.res, await rewardView(r));
+}, { roles: ['admin'] });
+
+on('PUT', '/api/admin/rewards/:id', async (ctx) => {
+  const cur = await repo.rewards.byId(ctx.params.id);
+  if (!cur) return fail(ctx.res, 3014, '奖品不存在');
+  if (ctx.body.stars != null && !(Number(ctx.body.stars) > 0)) return fail(ctx.res, 1001, '星数不对');
+  let imageId;
+  if (ctx.body.imageBase64) {
+    const img = decodeImage(ctx.body.imageBase64);
+    if (img.error) return fail(ctx.res, 1001, '奖品照片：' + img.error);
+    const { asset } = await putAssetBuf('photo', img.buf, img.ext, { mime: 'image/' + img.ext });
+    imageId = asset.id;
+  }
+  const r = await repo.rewards.update(cur.id, { name: ctx.body.name, stars: ctx.body.stars,
+    note: ctx.body.note, active: ctx.body.active, imageId });
+  ok(ctx.res, await rewardView(r));
+}, { roles: ['admin'] });
+
+on('DELETE', '/api/admin/rewards/:id', async (ctx) => {
+  const cur = await repo.rewards.byId(ctx.params.id);
+  if (!cur) return fail(ctx.res, 3014, '奖品不存在');
+  if (await repo.rewards.countRedemptions(cur.id)) return fail(ctx.res, 3014, '已经有学生换过这个奖品，改成下架就好');
+  await repo.rewards.remove(cur.id);
+  ok(ctx.res, { ok: true });
+}, { roles: ['admin'] });
+
+/** 待发放的兑换：老师在前台把礼物给孩子后点「已发放」 */
+on('GET', '/api/admin/redemptions', async (ctx) => {
+  ok(ctx.res, { list: await repo.redemptions.list(ctx.query.status || null), pending: await repo.redemptions.countPending() });
+}, { roles: ['teacher', 'admin'] });
+
+on('POST', '/api/admin/redemptions/:id/done', async (ctx) => {
+  const r = await repo.redemptions.byId(ctx.params.id);
+  if (!r || r.status !== 'pending') return fail(ctx.res, 3014, '这条兑换已经处理过了');
+  await repo.redemptions.setStatus(r.id, 'done');
+  ok(ctx.res, { ok: true });
+}, { roles: ['teacher', 'admin'] });
+
+/** 取消兑换：星星退回给学生 */
+on('POST', '/api/admin/redemptions/:id/cancel', async (ctx) => {
+  const r = await repo.redemptions.byId(ctx.params.id);
+  if (!r || r.status !== 'pending') return fail(ctx.res, 3014, '这条兑换已经处理过了');
+  await repo.redemptions.setStatus(r.id, 'canceled');
+  await repo.users.addStars(r.studentId, r.stars);
+  ok(ctx.res, { ok: true, refunded: r.stars });
 }, { roles: ['teacher', 'admin'] });
 
 /* ================= 宣传：喜报、作品、预约试听 ================= */
@@ -1172,4 +1284,4 @@ async function handleApi(req, res, pathname) {
   }
 }
 
-module.exports = { handleApi, CHECKIN_SECONDS, maskName };
+module.exports = { handleApi, CHECKIN_SECONDS, maskName, RUBRIC_ITEMS };
