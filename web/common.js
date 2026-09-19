@@ -27,11 +27,37 @@
     }
     return j.data;
   }
+  /* GET 结果的短时缓存：切标签、返回上一页时不用再等一次网络往返。
+   * 任何写操作（POST/PUT/DELETE）都会清空，保证不会看到过期数据。 */
+  const cache = new Map();
+  const CACHE_MS = 45000;
+
+  function clearCache() { cache.clear(); }
+
+  async function cachedGet(path, ttl) {
+    const hit = cache.get(path);
+    if (hit && Date.now() - hit.at < (ttl || CACHE_MS)) return hit.data;
+    if (hit && hit.pending) return hit.pending;                 // 同一时刻只发一次
+    const pending = request('GET', path).then((data) => {
+      cache.set(path, { data, at: Date.now() });
+      return data;
+    }).catch((e) => { cache.delete(path); throw e; });
+    cache.set(path, { ...(hit || {}), pending });
+    return pending;
+  }
+
   const API = {
-    get: (p) => request('GET', p),
-    post: (p, b) => request('POST', p, b),
-    put: (p, b) => request('PUT', p, b),
-    del: (p) => request('DELETE', p),
+    get: (p, ttl) => (ttl === undefined ? request('GET', p) : cachedGet(p, ttl)),
+    post: (p, b) => { clearCache(); return request('POST', p, b); },
+    put: (p, b) => { clearCache(); return request('PUT', p, b); },
+    del: (p) => { clearCache(); return request('DELETE', p); },
+    clearCache,
+    /** 闲时预取：把可能马上要看的页面数据先拉回来放进缓存 */
+    prefetch(paths, ttl) {
+      const go = () => paths.forEach((p) => cachedGet(p, ttl).catch(() => {}));
+      if ('requestIdleCallback' in window) requestIdleCallback(go, { timeout: 1500 });
+      else setTimeout(go, 300);
+    },
   };
 
   let toastTimer;

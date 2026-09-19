@@ -111,7 +111,9 @@
   const HOME = {
     top: () => `<h1><img src="brand/logo-96.png" alt="">教务台</h1>`, tab: true,
     body: async () => {
-      const d = await API.get('/api/admin/dashboard');
+      const d = await API.get('/api/admin/dashboard', 20000);
+      // 首页看完，顺手把其他标签的数据拉回来，切过去就是瞬开
+      API.prefetch(['/api/classes?withMembers=1', '/api/homeworks', '/api/admin/students', '/api/meta']);
       const admin = d.role === 'admin';
       const todo = [];
       if (d.toReview) todo.push(['hwlist', '作业待批改', d.toReview, '去批改', 'coral']);
@@ -166,7 +168,7 @@
   const CLASSES = {
     top: () => `<h1><img src="brand/logo-96.png" alt="">班级</h1><button class="btn sm ghost" data-go="classform" data-arg='{"clsId":null}'>+ 新建</button>`, tab: true,
     body: async () => {
-      const cs = await API.get('/api/classes?withMembers=1');
+      const cs = await API.get('/api/classes?withMembers=1', 45000);
       if (!cs.length) return `<div class="empty">还没有班级<br><span class="small">点右上角新建，先选科目和年级段</span></div>`;
       // 负责人也带课：自己的班排前面，别人的班压暗显示（仍然可以管理）
       const myId = (Store.user || {}).id;
@@ -210,13 +212,14 @@
   const CLASSFORM = {
     top: () => `<button class="back" data-go="classes">‹</button><h1>${S.clsId ? '管理班级' : '新建班级'}</h1>`, noTab: true,
     body: async () => {
-      const [subj, bands, cs] = await Promise.all([API.get('/api/subjects'), API.get('/api/grade-bands'), API.get('/api/classes')]);
+      const [meta, cs] = await Promise.all([API.get('/api/meta', 300000), API.get('/api/classes', 45000)]);
+      const subj = meta, bands = meta.gradeBands;
       const c = S.clsId ? cs.find((x) => x.id === S.clsId) : null;
       if (S.clsId && !c) return `<div class="empty">班级不存在</div>`;
       const ss = c ? await API.get(`/api/classes/${c.id}/students`) : [];
       const subId = c && c.subject ? c.subject.id : null;
       // 负责人可以指定这个班归谁带；老师自己建的班就是自己的
-      const staff = isAdmin() ? (await API.get('/api/admin/teachers')).filter((u) => u.active) : [];
+      const staff = isAdmin() ? (await API.get('/api/admin/teachers', 45000)).filter((u) => u.active) : [];
       // 老师只能开自己教的科目；负责人不限
       const myIds = subj.mine || [];
       const subjList = (!isAdmin() && myIds.length) ? subj.subjects.filter((x) => myIds.includes(x.id)) : subj.subjects;
@@ -244,7 +247,7 @@
   const HWLIST = {
     top: () => `<h1><img src="brand/logo-96.png" alt="">作业</h1><button class="btn sm" data-go="hwnew">+ 布置</button>`, tab: true,
     body: async () => {
-      const hws = await API.get('/api/homeworks');
+      const hws = await API.get('/api/homeworks', 45000);
       if (!hws.length) return `<div class="empty">还没布置过作业<br><span class="small">点右上角「+ 布置」</span></div>`;
       // 待批改的排最前面，标红显示份数；剩下的按"还没交齐"和"全批完"分开
       const todo = hws.filter((h) => h.pending > 0);
@@ -266,7 +269,7 @@
   const HWNEW = {
     top: () => `<button class="back" data-go="hwlist">‹</button><h1>布置作业</h1>`, noTab: true,
     body: async () => {
-      const [classes, books] = await Promise.all([API.get('/api/classes'), API.get('/api/books')]);
+      const [classes, books] = await Promise.all([API.get('/api/classes', 45000), API.get('/api/books', 300000)]);
       if (!classes.length) return `<div class="empty">请先建班级<br><span class="small">在「班级」里点「+ 新建」</span></div>`;
       // 作业布置给班级，科目跟着班级走；只有英语班能布置课本跟读
       if (!classes.some((c) => c.id === S.newClassId)) S.newClassId = classes[0].id;
@@ -373,7 +376,7 @@
 
   async function loadPages() {
     const bookId = document.getElementById('f-book').value;
-    const cat = await API.get(`/api/books/${bookId}/catalog`);
+    const cat = await API.get(`/api/books/${bookId}/catalog`, 300000);
     const opts = [];
     cat.lessons.forEach((l) => l.pages.forEach((p) => opts.push(`<option value="${p.id}">${esc(l.title)} · 第 ${p.pageNo} 页（${p.hotspotCount} 句）</option>`)));
     document.getElementById('f-page').innerHTML = opts.join('') || '<option value="">（无页面）</option>';
@@ -382,7 +385,7 @@
   async function loadHotspots() {
     const pid = document.getElementById('f-page').value;
     if (!pid) return;
-    const d = await API.get(`/api/pages/${pid}`);
+    const d = await API.get(`/api/pages/${pid}`, 300000);
     S.pick.pageId = Number(pid); S.pick.hotspots = d.hotspots; S.pick.sel = [];
     document.getElementById('hs-list').innerHTML = d.hotspots.map((h, i) => `
       <label class="row" style="gap:10px;padding:7px 0;align-items:flex-start">
@@ -501,7 +504,7 @@
   const STUDENTS = {
     top: () => `<h1><img src="brand/logo-96.png" alt="">学员</h1>${isAdmin() ? '<button class="btn sm" data-act="newStudent">+ 建档</button>' : ''}`, tab: true,
     body: async () => {
-      const list = await API.get('/api/admin/students' + (S.stuQ ? '?q=' + encodeURIComponent(S.stuQ) : ''));
+      const list = await API.get('/api/admin/students' + (S.stuQ ? '?q=' + encodeURIComponent(S.stuQ) : ''), 45000);
       const low = list.filter((x) => x.status === 'active' && x.leftHours > 0 && x.leftHours <= 4);
       return `<div class="card tight mb"><input id="stu-q" value="${esc(S.stuQ || '')}" placeholder="搜学员姓名" data-act="noop"></div>
         ${low.length ? `<div class="card tight mb warnbox"><div class="strong">课时快用完了</div>
@@ -614,7 +617,7 @@
   const LEAVES = {
     top: () => `<button class="back" data-go="me">‹</button><h1>请假审批</h1>`, noTab: true,
     body: async () => {
-      const d = await API.get('/api/admin/leaves');
+      const d = await API.get('/api/admin/leaves', 20000);
       const pend = d.list.filter((l) => l.status === 'pending');
       const other = d.list.filter((l) => l.status !== 'pending').slice(0, 15);
       return `${pend.length ? pend.map((l) => `<div class="card">
@@ -653,7 +656,7 @@
     top: () => `<button class="back" data-go="me">‹</button><h1>星星奖品</h1>`, noTab: true,
     body: async () => {
       const admin = isAdmin();
-      const [data, reds] = await Promise.all([API.get('/api/rewards'), API.get('/api/admin/redemptions')]);
+      const [data, reds] = await Promise.all([API.get('/api/rewards', 20000), API.get('/api/admin/redemptions', 20000)]);
       const pending = reds.list.filter((r) => r.status === 'pending');
       const done = reds.list.filter((r) => r.status !== 'pending').slice(0, 10);
       const newForm = admin ? `<div class="card">
@@ -703,7 +706,7 @@
   const LEADS = {
     top: () => `<button class="back" data-go="me">‹</button><h1>家长咨询</h1>`, noTab: true,
     body: async () => {
-      const [ps, leads] = await Promise.all([API.get('/api/admin/promo-stats'), API.get('/api/admin/leads')]);
+      const [ps, leads] = await Promise.all([API.get('/api/admin/promo-stats', 20000), API.get('/api/admin/leads', 20000)]);
       const src = (l) => (l.source === 'share' ? (l.refName ? `看了 ${esc(l.refName)} 的分享` : '来自分享页')
         : l.source === 'gallery' ? '来自书法作品展' : '来自预约试听页');
       return `<div class="card">
@@ -773,7 +776,7 @@
   const STAFF = {
     top: () => `<button class="back" data-go="me">‹</button><h1>老师账号</h1><button class="btn sm" data-act="newStaff">+ 新建</button>`, noTab: true,
     body: async () => {
-      const [list, subj] = await Promise.all([API.get('/api/admin/teachers'), API.get('/api/subjects')]);
+      const [list, subj] = await Promise.all([API.get('/api/admin/teachers'), API.get('/api/meta', 300000)]);
       S.subjects = subj.subjects;
       return `<div class="card tight mb"><div class="muted small">
           每位老师用「姓名 + 自己的口令」登录，只能看到自己带的班和作业；家长预约、教材内容只有负责人能看。
@@ -1281,7 +1284,7 @@
       catch (e) { toast(e.message, 2600); }
     },
     async newPackage() {
-      const subj = await API.get('/api/subjects');
+      const subj = await API.get('/api/meta', 300000);
       pickList('这个课包属于哪个科目？', [{ id: 0, name: '不限科目' }, ...subj.subjects], async (x) => {
         const total = Number(prompt('购买课时（不含赠送）', '40'));
         if (!(total > 0)) return toast('课时数不对');
@@ -1347,7 +1350,8 @@
           hours: Number(document.getElementById('roll-hours').value) || 1, records,
         });
         toast(`已点名 ${r.marked} 人，共扣 ${r.usedHours} 课时`
-          + (r.noPackage.length ? `；${r.noPackage.join('、')} 没有可用课包（没录、已用完、过期或停课中）` : ''), 3600);
+          + (r.noPackage.length ? `；${r.noPackage.join('、')} 没有可用课包（没录、已用完、过期或停课中）` : '')
+          + (r.overdrawn && r.overdrawn.length ? `；${r.overdrawn.join('、')} 课时已用超，记得提醒续费` : ''), 4000);
         render();
       } catch (e) { toast(e.message, 2600); el.disabled = false; }
     },

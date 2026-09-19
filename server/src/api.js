@@ -223,6 +223,15 @@ on('GET', '/api/classes', async (ctx) => {
 
 on('GET', '/api/grade-bands', async (ctx) => ok(ctx.res, GRADE_BANDS), { auth: false });
 
+/** 基本不变的数据合到一个接口：科目、课程、年级段。前端缓存着用，少几次往返 */
+on('GET', '/api/meta', async (ctx) => {
+  const cs = await repo.courses.all();
+  const subjects = (await repo.subjects.all()).map((x) => ({ ...subjectView(x),
+    courses: cs.filter((c) => c.subjectId === x.id).map((c) => ({ id: c.id, name: c.name })) }));
+  const mine = ctx.user.role === 'student' ? [] : await repo.subjects.idsForTeacher(ctx.user.id);
+  ok(ctx.res, { subjects, mine, gradeBands: GRADE_BANDS });
+});
+
 /** 校验班级表单；班名不填时按「年级段 + 科目 + 班」自动起名 */
 async function classForm(body, user) {
   const subject = await repo.subjects.byId(body.subjectId);
@@ -1300,6 +1309,10 @@ on('POST', '/api/admin/packages/:id/adjust', async (ctx) => {
   if (!p) return fail(ctx.res, 3016, '课包不存在');
   const hours = Number(ctx.body.hours);
   if (!hours || Math.abs(hours) > 1000) return fail(ctx.res, 1001, '请填写要加减的课时数');
+  const left = (p.totalHours || 0) + (p.giftHours || 0) - (p.usedHours || 0);
+  if (hours < 0 && left + hours < 0 && !ctx.body.force) {
+    return fail(ctx.res, 3016, `这个课包只剩 ${Math.round(left * 100) / 100} 课时，扣不了 ${Math.abs(hours)}`);
+  }
   await repo.packages.addUsed(p.id, -hours);                   // 加课时 = 少用了
   await repo.hourLogs.add({ packageId: p.id, studentId: p.studentId, hours, reason: 'adjust',
     date: today(), note: String(ctx.body.note || '').slice(0, 100), createdBy: ctx.user.id });
@@ -1350,7 +1363,7 @@ on('POST', '/api/classes/:id/attendance', async (ctx) => {
   const memberIds = new Set(members.map((m) => m.id));
   const prevRows = new Map((await repo.attendance.byClassDate(cls.id, date)).map((a) => [a.studentId, a]));
   const seen = new Set();
-  const noPackage = [];
+  const noPackage = [], overdrawn = [];
   let marked = 0, used = 0;
   for (const r of records) {
     const sid = Number(r.studentId);
@@ -1386,14 +1399,18 @@ on('POST', '/api/classes/:id/attendance', async (ctx) => {
       hours: pkg ? hours : 0, packageId: pkg ? pkg.id : null, note: String(r.note || '').slice(0, 100), createdBy: ctx.user.id });
     if (pkg && hours > 0) {
       await repo.packages.addUsed(pkg.id, hours);
-      await repo.hourLogs.add({ packageId: pkg.id, studentId: r.studentId, hours: -hours, reason: r.status,
+      await repo.hourLogs.add({ packageId: pkg.id, studentId: sid, hours: -hours, reason: r.status,
         refId: att.id, date, createdBy: ctx.user.id });
       used += hours;
+      // 扣完变成负数：课时已经用超了，提醒老师联系家长续费
+      const after = (pkg.totalHours || 0) + (pkg.giftHours || 0) - (pkg.usedHours || 0) - hours;
+      if (after < 0) overdrawn.push((members.find((m) => m.id === sid) || {}).name);
     }
     marked++;
   }
   await repo.settings.set('hours_class_' + cls.id, per);
-  ok(ctx.res, { date, marked, usedHours: Math.round(used * 100) / 100, noPackage: [...new Set(noPackage)] });
+  ok(ctx.res, { date, marked, usedHours: Math.round(used * 100) / 100,
+    noPackage: [...new Set(noPackage)], overdrawn: [...new Set(overdrawn.filter(Boolean))] });
 }, { roles: ['teacher', 'admin'] });
 
 /* ---------- 请假：家长在学生端提交，老师审批 ---------- */
@@ -1423,7 +1440,23 @@ on('POST', '/api/admin/leaves/:id/:action', async (ctx) => {
   const st = map[ctx.params.action];
   if (!st) return fail(ctx.res, 1001, '操作不对');
   await repo.leaves.setStatus(l.id, st, ctx.user.id);
-  ok(ctx.res, { ok: true, status: st });
+
+  // 这天如果已经按到课/旷课扣过课时，准假后自动退回，免得白扣
+  let refunded = 0;
+  if (st === 'approved' && l.classId) {
+    const rec = (await repo.attendance.byClassDate(l.classId, l.date)).find((a) => a.studentId === l.studentId);
+    if (rec && rec.status !== 'leave') {
+      if (rec.hours && rec.packageId) {
+        await repo.packages.addUsed(rec.packageId, -rec.hours);
+        await repo.hourLogs.add({ packageId: rec.packageId, studentId: l.studentId, hours: rec.hours,
+          reason: 'revert', refId: rec.id, date: l.date, note: '事后准假，退回课时', createdBy: ctx.user.id });
+        refunded = rec.hours;
+      }
+      await repo.attendance.upsert({ classId: l.classId, studentId: l.studentId, date: l.date,
+        status: 'leave', hours: 0, packageId: null, note: rec.note, createdBy: ctx.user.id });
+    }
+  }
+  ok(ctx.res, { ok: true, status: st, refunded });
 }, { roles: ['teacher', 'admin'] });
 
 /* ---------- 学生端：我的课时、请假 ---------- */

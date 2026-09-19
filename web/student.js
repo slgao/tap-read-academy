@@ -187,7 +187,8 @@
     top: () => `<h1><img src="brand/logo-96.png" alt="">福斯特</h1><span class="star-pill" id="top-stars">${ic('star')}<span>…</span></span>`,
     tab: true,
     body: async () => {
-      const [sum, hws] = await Promise.all([API.get('/api/study/summary'), API.get('/api/homeworks')]);
+      const [sum, hws] = await Promise.all([API.get('/api/study/summary', 15000), API.get('/api/homeworks', 30000)]);
+      API.prefetch(['/api/books', '/api/listening'], 300000);
       const todo = hws.filter((h) => h.status === 'todo' || h.status === 'rejected');
       // 只算今天；sum.days[0] 是最近有记录的一天，不一定是今天
       const todayRow = sum.days.find((d) => d.date === dayKey());
@@ -241,7 +242,7 @@
     top: () => `<h1><img src="brand/logo-96.png" alt="">教材</h1>`,
     tab: true,
     body: async () => {
-      const books = await API.get('/api/books');
+      const books = await API.get('/api/books', 300000);
       if (!books.length) return `<div class="empty">还没有教材<br><span class="small">请老师在内容后台添加</span></div>`;
       return books.map((b) => `
         <div class="booktile" data-go="catalog" data-arg='${JSON.stringify({ bookId: b.id })}'>
@@ -259,7 +260,7 @@
     top: () => `<button class="back" data-go="shelf">‹</button><h1><span class="t">${esc((S.catalog && S.catalog.book.title) || '目录')}</span></h1>`,
     noTab: true,
     body: async () => {
-      const data = await API.get(`/api/books/${S.bookId}/catalog`);
+      const data = await API.get(`/api/books/${S.bookId}/catalog`, 300000);
       S.catalog = data;
       $top.innerHTML = CATALOG.top();
       if (!data.lessons.length) return `<div class="empty">这本书还没有内容</div>`;
@@ -284,8 +285,10 @@
       <button class="iconbtn ${S.showHs ? 'on' : ''}" data-act="toggleHs" title="显示/隐藏热区">框</button>`,
     bare: true,
     body: async () => {
-      const d = await API.get(`/api/pages/${S.pageId}`);
+      const d = await API.get(`/api/pages/${S.pageId}`, 300000);
       S.page = d; S.hsIdx = -1;
+      // 预取上一页和下一页：翻页时不用再等网络
+      API.prefetch([d.prevPageId, d.nextPageId].filter(Boolean).map((id) => `/api/pages/${id}`), 300000);
       $top.innerHTML = READER.top();
       const hwHs = S.hwHotspotIds || [];
       return `
@@ -353,7 +356,7 @@
     top: () => `<h1><img src="brand/logo-96.png" alt="">作业</h1>`,
     tab: true,
     body: async () => {
-      const all = await API.get('/api/homeworks');
+      const all = await API.get('/api/homeworks', 30000);
       if (!all.length) return `<div class="empty">还没有作业</div>`;
       const subs = [];
       all.forEach((h) => { if (h.subject && !subs.some((x) => x.code === h.subject.code)) subs.push(h.subject); });
@@ -727,7 +730,11 @@
     top: () => `<h1><img src="brand/logo-96.png" alt="">我的</h1>`,
     tab: true,
     body: async () => {
-      const [sum, me, allShares] = await Promise.all([API.get('/api/study/summary'), API.get('/api/me'), API.get('/api/shares/mine').catch(() => [])]);
+      // 五个接口一起发，等一次网络就够了（原来渲染完还要再等两次）
+      const [sum, me, allShares, archive, rewards] = await Promise.all([
+        API.get('/api/study/summary'), API.get('/api/me'), API.get('/api/shares/mine').catch(() => []),
+        API.get('/api/me/archive').catch(() => null), API.get('/api/rewards').catch(() => null)]);
+      S.archive = archive; S.rewards = rewards;
       const shares = allShares.filter((x) => x.status === 'active');   // 撤回的不再列出
       const map = {}; sum.days.forEach((d) => { map[d.date] = d; });
       const cells = [];
@@ -777,17 +784,17 @@
         </div>
         <div class="card"><div class="row between"><span>切换账号</span><button class="btn sm grey" data-act="logout">退出登录</button></div></div>`;
     },
-    after: () => { drawArchive(); drawRewards(); },
+    after: () => { drawArchive(S.archive); drawRewards(S.rewards); },
   };
 
   /** 我的课时：剩多少、什么时候到期、最近上了几次课、请假记录 */
   const LEAVE_NAME = { pending: '待老师确认', approved: '已准假', rejected: '未准假' };
   const ATT_NAME2 = { present: '到课', leave: '请假', absent: '缺课' };
-  async function drawArchive() {
+  async function drawArchive(pre) {
     const box = document.getElementById('ar-body');
     if (!box) return;
     try {
-      const d = await API.get('/api/me/archive');
+      const d = pre || await API.get('/api/me/archive');
       const list = d.packages.filter((p) => p.status !== 'finished');
       box.innerHTML = `
         <div class="row between"><div class="bigscore">${d.hours.leftHours}<small> 课时</small></div>
@@ -808,11 +815,11 @@
   }
 
   /** 奖品墙：显示进度，够了才能点兑换 */
-  async function drawRewards() {
+  async function drawRewards(pre) {
     const box = document.getElementById('rw-list');
     if (!box) return;
     try {
-      const d = await API.get('/api/rewards');
+      const d = pre || await API.get('/api/rewards');
       const pending = d.mine.filter((x) => x.status === 'pending');
       box.innerHTML = `${d.rewards.length ? d.rewards.map((r) => `
         <div class="rw-row">
@@ -864,7 +871,7 @@
     stop() { if (this.el) { this.el.pause(); } },
 
     async load(lessonId) {
-      const d = await API.get(`/api/lessons/${lessonId}/transcript`);
+      const d = await API.get(`/api/lessons/${lessonId}/transcript`, 300000);
       const el = this.audio();
       if (!this.data || this.data.lesson.id !== d.lesson.id) {
         this.pause();
@@ -953,7 +960,7 @@
     top: () => `<h1><img src="brand/logo-96.png" alt="">听力</h1>`,
     tab: true,
     body: async () => {
-      const books = await API.get('/api/listening');
+      const books = await API.get('/api/listening', 300000);
       if (!books.length) {
         return `<div class="empty">还没有带音频的课文<br><span class="small">老师在内容后台给课文上传音频后，这里就能听</span></div>`;
       }

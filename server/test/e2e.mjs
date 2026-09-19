@@ -530,9 +530,11 @@ const TAG = '__e2e_' + Date.now();
   check('老师改不了档案资料', /无权限/.test(noEdit || ''), noEdit);
 
   // 学校简介
+  const aboutBefore = await call('GET', '/api/about', null, T.token);
   await call('PUT', '/api/admin/about', { title: TAG + '学校', text: '办学十年\n主打小班教学' }, T.token);
   const aboutHtml = await (await fetch(BASE + '/about')).text();
   check('学校简介公开页', aboutHtml.includes(TAG + '学校') && aboutHtml.includes('主打小班教学') && aboutHtml.includes('预约试听'), '');
+  await call('PUT', '/api/admin/about', { title: aboutBefore.title, text: aboutBefore.text }, T.token);   // 还原，别动真实简介
 
   // 清理
   await call('DELETE', `/api/admin/teachers/${tOnly.id}`, null, T.token).catch(() => {});
@@ -631,6 +633,38 @@ const TAG = '__e2e_' + Date.now();
   await call('DELETE', `/api/homeworks/${pendHw.id}`, null, T.token);
   await call('DELETE', `/api/classes/${rightSubj.id}`, null, T.token);
   await call('DELETE', `/api/admin/teachers/${subjTeacher.id}`, null, T.token);
+
+  log('\n[15] 课时边界：扣成负数、事后准假、重复点名');
+  const edgeCls = await call('POST', '/api/classes', { subjectId: enX.id, gradeBand: '初中', name: TAG + ' 边界班' }, T.token);
+  const edgeStu = await call('POST', '/api/admin/students', { name: TAG + '边界同学', classId: edgeCls.id }, T.token);
+  const edgeTok = (await call('POST', '/api/auth/login', { role: 'student', name: TAG + '边界同学' })).token;
+  const edgePkg = await call('POST', '/api/admin/packages', { studentId: edgeStu.id, totalHours: 2, giftHours: 0,
+    priceOriginal: 0, pricePaid: 0, purchasedAt: dayOf(0), expiresAt: '' }, T.token);
+  const tooMuch = await expectFail('POST', `/api/admin/packages/${edgePkg.id}/adjust`, { hours: -5 }, T.token);
+  check('手工扣减不能把课时扣成负数', /只剩 2 课时/.test(tooMuch || ''), tooMuch);
+
+  // 一次课扣 3 课时，只剩 2：允许但要提醒已用超
+  const edgeOver = await call('POST', `/api/classes/${edgeCls.id}/attendance`, { date: dayOf(0), hours: 3,
+    records: [{ studentId: edgeStu.id, status: 'present' }] }, T.token);
+  check('课时不够时照常点名，但提示已用超', edgeOver.overdrawn.includes(edgeStu.name), JSON.stringify(edgeOver.overdrawn));
+
+  // 重复提交同一次点名：不产生新的流水
+  const logsBefore = (await call('GET', `/api/admin/students/${edgeStu.id}`, null, T.token)).logs.length;
+  await call('POST', `/api/classes/${edgeCls.id}/attendance`, { date: dayOf(0), hours: 3,
+    records: [{ studentId: edgeStu.id, status: 'present' }, { studentId: edgeStu.id, status: 'present' }] }, T.token);
+  const logsAfter = (await call('GET', `/api/admin/students/${edgeStu.id}`, null, T.token)).logs.length;
+  check('重复点名不再重复写流水', logsBefore === logsAfter, `${logsBefore} → ${logsAfter}`);
+
+  // 事后准假：已经扣掉的课时自动退回，考勤改成请假
+  const lateLeave = await call('POST', '/api/leaves', { date: dayOf(0), classId: edgeCls.id, reason: '临时有事' }, edgeTok);
+  const edgeAppr = await call('POST', `/api/admin/leaves/${lateLeave.id}/approve`, {}, T.token);
+  const edgeAfter = await call('GET', `/api/admin/students/${edgeStu.id}`, null, T.token);
+  check('事后准假：课时退回、考勤改成请假', edgeAppr.refunded === 3 && edgeAfter.hours.leftHours === 2
+    && edgeAfter.attendance[0].status === 'leave', `退回 ${edgeAppr.refunded}，剩 ${edgeAfter.hours.leftHours}`);
+
+  await call('POST', `/api/classes/${edgeCls.id}/attendance`, { date: dayOf(0), hours: 3,
+    records: [{ studentId: edgeStu.id, status: 'clear' }] }, T.token);
+  await call('DELETE', `/api/classes/${edgeCls.id}`, null, T.token);
 
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);
