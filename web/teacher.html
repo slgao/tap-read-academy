@@ -3,12 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>福斯特培训学校 · 老师</title>
+<title>福斯特培训学校 · 老师端</title>
+<meta name="description" content="布置作业、批改、点名、学员档案">
+<!-- 微信分享卡片：部分微信版本会读这些标签生成缩略图；要保证显示需接入公众号 JS-SDK -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="福斯特培训学校">
+<meta property="og:title" content="福斯特培训学校 · 老师端">
+<meta property="og:description" content="布置作业、批改、点名、学员档案">
+<meta property="og:image" content="brand/share-teacher-500.jpg" data-abs>
+<meta property="og:image:width" content="500">
+<meta property="og:image:height" content="500">
+<meta itemprop="name" content="福斯特培训学校 · 老师端">
+<meta itemprop="description" content="布置作业、批改、点名、学员档案">
+<meta itemprop="image" content="brand/share-teacher-500.jpg" data-abs>
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="brand/share-teacher-500.jpg" data-abs>
+<link rel="apple-touch-icon" href="brand/logo-192.png">
+<script>
+  // 分享图必须是完整网址；用当前域名补全，仓库里不写死服务器地址
+  document.querySelectorAll('meta[data-abs]').forEach(function (m) {
+    m.setAttribute('content', new URL(m.getAttribute('content'), location.href).href);
+  });
+</script>
 <link rel="stylesheet" href="styles.css">
 <link rel="icon" type="image/png" href="brand/favicon-48.png">
 <meta name="theme-color" content="#FFFFFF">
 </head>
 <body>
+<div hidden aria-hidden="true"><img src="brand/share-teacher-500.jpg" alt="" width="500" height="500"></div>
 <div id="app">
   <div class="topbar" id="topbar"></div>
   <div class="view" id="view"></div>
