@@ -42,6 +42,7 @@ const toUser = (r) => r && ({
 const toClass = (r) => r && ({
   id: r.id, name: r.name, inviteCode: r.invite_code, teacherId: r.teacher_id, createdAt: r.created_at,
   subjectId: r.subject_id, gradeBand: r.grade_band || '',
+  courseId: r.course_id, schedule: parseJSON(r.schedule, null),
 });
 const toBook = (r) => r && ({
   id: r.id, title: r.title, subtitle: r.subtitle, grade: r.grade, cover: r.cover,
@@ -169,13 +170,20 @@ const classes = {
   },
   async countByTeacher(teacherId) { return count('SELECT COUNT(*) n FROM classes WHERE teacher_id=?', num(teacherId)); },
   async byTeacher(teacherId) { return q('SELECT * FROM classes WHERE teacher_id=? ORDER BY id').all(num(teacherId)).map(toClass); },
-  async create({ name, inviteCode, teacherId, subjectId, gradeBand }) {
-    const r = q('INSERT INTO classes (name, invite_code, teacher_id, subject_id, grade_band, created_at) VALUES (?,?,?,?,?,?)')
-      .run(name, inviteCode, num(teacherId), subjectId ? num(subjectId) : null, gradeBand || '', now());
+  async create({ name, inviteCode, teacherId, subjectId, gradeBand, courseId, schedule }) {
+    const r = q(`INSERT INTO classes (name, invite_code, teacher_id, subject_id, grade_band, course_id, schedule, created_at)
+                 VALUES (?,?,?,?,?,?,?,?)`)
+      .run(name, inviteCode, num(teacherId), subjectId ? num(subjectId) : null, gradeBand || '',
+        courseId ? num(courseId) : null, schedule ? JSON.stringify(schedule) : null, now());
     return classes.byId(Number(r.lastInsertRowid));
   },
-  async update(id, { name, subjectId, gradeBand }) {
-    q('UPDATE classes SET name=?, subject_id=?, grade_band=? WHERE id=?').run(name, num(subjectId), gradeBand || '', num(id));
+  async update(id, { name, subjectId, gradeBand, courseId, schedule }) {
+    const cur = q('SELECT * FROM classes WHERE id=?').get(num(id));
+    if (!cur) return null;
+    q('UPDATE classes SET name=?, subject_id=?, grade_band=?, course_id=?, schedule=? WHERE id=?')
+      .run(name, num(subjectId), gradeBand || '',
+        courseId === undefined ? cur.course_id : (courseId ? num(courseId) : null),
+        schedule === undefined ? cur.schedule : (schedule ? JSON.stringify(schedule) : null), num(id));
     return classes.byId(id);
   },
   /** 换任课老师：一个班转给另一位老师 */
@@ -876,7 +884,24 @@ const courses = {
     const r = q('INSERT INTO courses (subject_id, name, sort) VALUES (?,?,?)').run(num(subjectId), name, num(sort) || 0);
     return courses.byId(Number(r.lastInsertRowid));
   },
+  async update(id, { name, sort, active }) {
+    const cur = q('SELECT * FROM courses WHERE id=?').get(num(id));
+    if (!cur) return null;
+    q('UPDATE courses SET name=?, sort=?, active=? WHERE id=?')
+      .run(name == null ? cur.name : name, sort == null ? cur.sort : num(sort),
+        active == null ? cur.active : (active ? 1 : 0), num(id));
+    return courses.byId(id);
+  },
   async remove(id) { q('DELETE FROM courses WHERE id=?').run(num(id)); },
+  async usage(id) {
+    return {
+      classes: count('SELECT COUNT(*) n FROM classes WHERE course_id=?', num(id)),
+      packages: count('SELECT COUNT(*) n FROM packages WHERE course_id=?', num(id)),
+    };
+  },
+  async byName(subjectId, name) {
+    return toCourse(q('SELECT * FROM courses WHERE subject_id=? AND name=?').get(num(subjectId), name));
+  },
 };
 
 const subjects = {

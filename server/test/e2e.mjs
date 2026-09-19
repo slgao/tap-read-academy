@@ -666,6 +666,46 @@ const TAG = '__e2e_' + Date.now();
     records: [{ studentId: edgeStu.id, status: 'clear' }] }, T.token);
   await call('DELETE', `/api/classes/${edgeCls.id}`, null, T.token);
 
+  log('\n[16] 排课、子科目、联系方式');
+  const schedSubj = (await call('GET', '/api/meta', null, T.token)).subjects.find((x) => x.code === 'en');
+  const newCourse = await call('POST', '/api/courses', { subjectId: schedSubj.id, name: TAG.slice(-6) + '英语' }, T.token);
+  check('老师可以自己加子科目（课程）', newCourse.name.endsWith('英语'), newCourse.name);
+  const dupCourse = await expectFail('POST', '/api/courses', { subjectId: schedSubj.id, name: newCourse.name }, T.token);
+  check('同一科目下课程不重名', /已经有/.test(dupCourse || ''), dupCourse);
+
+  const schedCls = await call('POST', '/api/classes', { subjectId: schedSubj.id, gradeBand: '三四年级',
+    courseId: newCourse.id, schedule: { days: [6, 2], start: '10:00', end: '11:30' } }, T.token);
+  check('班级带课程和排期，名字自动带课程名', schedCls.course.id === newCourse.id
+    && schedCls.scheduleText === '每周二、六 10:00–11:30' && schedCls.name.includes(newCourse.name),
+    `${schedCls.name} / ${schedCls.scheduleText}`);
+  check('算得出下次上课', /^\d{4}-\d{2}-\d{2}$/.test(schedCls.nextClassAt || ''), schedCls.nextClassAt);
+
+  const wrongCourse = await expectFail('POST', '/api/classes', { subjectId: (await call('GET', '/api/meta', null, T.token)).subjects
+    .find((x) => x.code === 'math').id, gradeBand: '初中', courseId: newCourse.id }, T.token);
+  check('课程和科目对不上被拒', /不属于所选科目/.test(wrongCourse || ''), wrongCourse);
+
+  const roster2 = await call('GET', `/api/classes/${schedCls.id}/attendance?date=2026-09-21`, null, T.token);   // 周一
+  check('点名页能看出这天是不是排课日', roster2.hasSchedule && roster2.meetsOn === false, `${roster2.scheduleText} / ${roster2.meetsOn}`);
+  const board2 = await call('GET', '/api/admin/dashboard', null, T.token);
+  check('教务台把今天有课的班排前面', board2.classes.every((c, i, a) => i === 0 || !(c.meetsToday && !a[i - 1].meetsToday)), '');
+
+  const usedCourse = await expectFail('DELETE', `/api/courses/${newCourse.id}`, null, T.token);
+  check('课程被班级占用时不能删', /在用这门课程/.test(usedCourse || ''), usedCourse);
+
+  // 联系方式
+  const ctBefore = await call('GET', '/api/contact');
+  await call('PUT', '/api/admin/contact', { phone: '15100000000', address: TAG + ' 和平路 1 号', hours: '9:00–20:00' }, T.token);
+  const ct = await call('GET', '/api/contact');
+  check('联系方式能存能读', ct.phone === '15100000000' && ct.address.includes('和平路'), `${ct.phone} ${ct.address}`);
+  const trialHtml2 = await (await fetch(BASE + '/trial')).text();
+  check('预约页底部显示联系方式', trialHtml2.includes('15100000000') && trialHtml2.includes('联系我们'), '');
+  const stuDenied = await expectFail('PUT', '/api/admin/contact', { phone: '13000000000' }, S.token);
+  check('学生改不了联系方式', /无权限/.test(stuDenied || ''), stuDenied);
+  await call('PUT', '/api/admin/contact', { phone: ctBefore.phone, address: ctBefore.address, hours: ctBefore.hours }, T.token);
+
+  await call('DELETE', `/api/classes/${schedCls.id}`, null, T.token);
+  await call('DELETE', `/api/courses/${newCourse.id}`, null, T.token);
+
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);
   check('有作业时拒绝删教材', /还有作业/.test(guarded || ''), guarded);

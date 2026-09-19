@@ -7,6 +7,7 @@ const repo = require('./repo');
 const store = require('./storage');
 const { ok, fail, readBody, rid, sha256, staffCode, encryptSecret, decryptSecret, today, dayKey, inviteCode } = require('./util');
 const grading = require('./grading');
+const schedule = require('./schedule');
 
 const CHECKIN_SECONDS = Number(process.env.CHECKIN_SECONDS) || 300;   // 当天学习满 5 分钟算打卡
 
@@ -193,13 +194,18 @@ async function canTouchClass(user, classId) {
 }
 
 async function classView(c) {
+  const course = c.courseId ? await repo.courses.byId(c.courseId) : null;
   return { id: c.id, name: c.name, inviteCode: c.inviteCode, teacherId: c.teacherId,
     subject: subjectView(await repo.subjects.byId(c.subjectId)), gradeBand: c.gradeBand,
+    course: course ? { id: course.id, name: course.name } : null,
+    schedule: c.schedule, scheduleText: schedule.text(c.schedule),
+    meetsToday: schedule.meetsOn(c.schedule, today()), nextClassAt: schedule.nextMeeting(c.schedule, today()),
     studentCount: await repo.classes.memberCount(c.id) };
 }
 
 on('GET', '/api/classes', async (ctx) => {
   const subs = await repo.subjects.all();
+  const allCourses = await repo.courses.all();
   const ids = await repo.classes.idsForUser(ctx.user);
   const [byId, counts] = [await repo.classes.byIds(ids), await repo.classes.memberCounts(ids)];
   // withMembers=1：把各班名单一起带回去，省得前端一个班一个请求
@@ -209,9 +215,14 @@ on('GET', '/api/classes', async (ctx) => {
     const c = byId.get(id);
     if (!c) continue;
     const t = ctx.user.role === 'admin' ? await repo.users.byId(c.teacherId) : null;
+    const course = c.courseId ? allCourses.find((x) => x.id === c.courseId) : null;
     rows.push({ id: c.id, name: c.name, inviteCode: c.inviteCode, teacherId: c.teacherId,
       teacherName: t ? t.name : (c.teacherId === ctx.user.id ? ctx.user.name : ''),
-      subject: subjectView(subs.find((x) => x.id === c.subjectId)), gradeBand: c.gradeBand, studentCount: counts.get(c.id) || 0,
+      subject: subjectView(subs.find((x) => x.id === c.subjectId)), gradeBand: c.gradeBand,
+      course: course ? { id: course.id, name: course.name } : null,
+      schedule: c.schedule, scheduleText: schedule.text(c.schedule),
+      meetsToday: schedule.meetsOn(c.schedule, today()), nextClassAt: schedule.nextMeeting(c.schedule, today()),
+      studentCount: counts.get(c.id) || 0,
       ...(members ? { members: members.get(c.id) || [] } : {}) });
   }
   // 按科目、年级段排好，界面直接分组显示
@@ -236,6 +247,12 @@ on('GET', '/api/meta', async (ctx) => {
 async function classForm(body, user) {
   const subject = await repo.subjects.byId(body.subjectId);
   if (!subject) return { error: '请选择科目' };
+  let courseId = null;
+  if (body.courseId) {
+    const course = await repo.courses.byId(body.courseId);
+    if (!course || course.subjectId !== subject.id) return { error: '这门课程不属于所选科目' };
+    courseId = course.id;
+  }
   // 老师只能开自己教的科目；负责人不限。没给老师设科目时不拦（老账号照常用）
   if (user && user.role === 'teacher') {
     const mine = await repo.subjects.idsForTeacher(user.id);
@@ -243,8 +260,12 @@ async function classForm(body, user) {
   }
   const gradeBand = String(body.gradeBand || '');
   if (!GRADE_BANDS.includes(gradeBand)) return { error: '请选择年级段' };
-  const name = String(body.name || '').trim().slice(0, 30) || `${gradeBand === '不分年级' ? '' : gradeBand}${subject.name}班`;
-  return { subject, gradeBand, name };
+  const sched = schedule.clean(body.schedule);
+  const course = courseId ? await repo.courses.byId(courseId) : null;
+  // 不填班名就按「年级段 + 课程（或科目）+ 班」自动起，比如「三四年级新概念英语班」
+  const name = String(body.name || '').trim().slice(0, 30)
+    || `${gradeBand === '不分年级' ? '' : gradeBand}${course ? course.name : subject.name}班`;
+  return { subject, gradeBand, name, courseId, schedule: sched };
 }
 
 on('POST', '/api/classes', async (ctx) => {
@@ -260,7 +281,8 @@ on('POST', '/api/classes', async (ctx) => {
     if (!t || t.role === 'student' || !t.active) return fail(ctx.res, 3013, '请选择一位在职的老师');
     teacherId = t.id;
   }
-  const cls = await repo.classes.create({ name: f.name, inviteCode: code, teacherId, subjectId: f.subject.id, gradeBand: f.gradeBand });
+  const cls = await repo.classes.create({ name: f.name, inviteCode: code, teacherId, subjectId: f.subject.id,
+    gradeBand: f.gradeBand, courseId: f.courseId, schedule: f.schedule });
   // 新班级默认可见全部教材（MVP 简化）
   for (const b of await repo.books.all()) await repo.books.grantToClass(b.id, cls.id);
   ok(ctx.res, await classView(cls));
@@ -283,7 +305,8 @@ on('PUT', '/api/classes/:id', async (ctx) => {
     if (!t.active) return fail(ctx.res, 3013, '这位老师的账号已停用');
     await repo.classes.setTeacher(cls.id, t.id);
   }
-  await repo.classes.update(cls.id, { name: f.name, subjectId: f.subject.id, gradeBand: f.gradeBand });
+  await repo.classes.update(cls.id, { name: f.name, subjectId: f.subject.id, gradeBand: f.gradeBand,
+    courseId: f.courseId, schedule: f.schedule });
   ok(ctx.res, await classView(await repo.classes.byId(cls.id)));
 }, { roles: ['teacher', 'admin'] });
 
@@ -935,6 +958,91 @@ on('PUT', '/api/me/subjects', async (ctx) => {
   ok(ctx.res, { mine: ids });
 }, { roles: ['teacher', 'admin'] });
 
+/* ---------- 子科目（课程）：老师自己维护 ---------- */
+/** 老师只能管自己教的科目下的课程；负责人不限 */
+async function canTouchSubject(user, subjectId) {
+  if (user.role === 'admin') return true;
+  const mine = await repo.subjects.idsForTeacher(user.id);
+  return !mine.length || mine.includes(Number(subjectId));
+}
+
+on('GET', '/api/courses', async (ctx) => {
+  const subs = await repo.subjects.all();
+  const list = await repo.courses.all();
+  const out = [];
+  for (const c of list) {
+    const usage = ctx.user.role === 'student' ? null : await repo.courses.usage(c.id);
+    out.push({ id: c.id, subjectId: c.subjectId, name: c.name, sort: c.sort,
+      subject: subjectView(subs.find((x) => x.id === c.subjectId)),
+      ...(usage ? { classCount: usage.classes, canDelete: usage.classes + usage.packages === 0 } : {}) });
+  }
+  ok(ctx.res, out);
+});
+
+on('POST', '/api/courses', async (ctx) => {
+  const subject = await repo.subjects.byId(ctx.body.subjectId);
+  if (!subject) return fail(ctx.res, 1001, '请选择科目');
+  if (!await canTouchSubject(ctx.user, subject.id)) return fail(ctx.res, 403, `你教的科目里没有「${subject.name}」`);
+  const name = String(ctx.body.name || '').trim().slice(0, 20);
+  if (!name) return fail(ctx.res, 1001, '请填写课程名称，比如「新概念英语」');
+  if (await repo.courses.byName(subject.id, name)) return fail(ctx.res, 3018, `${subject.name}下面已经有「${name}」了`);
+  const c = await repo.courses.create({ subjectId: subject.id, name, sort: Number(ctx.body.sort) || 99 });
+  ok(ctx.res, { id: c.id, subjectId: c.subjectId, name: c.name });
+}, { roles: ['teacher', 'admin'] });
+
+on('PUT', '/api/courses/:id', async (ctx) => {
+  const c = await repo.courses.byId(ctx.params.id);
+  if (!c) return fail(ctx.res, 3018, '课程不存在');
+  if (!await canTouchSubject(ctx.user, c.subjectId)) return fail(ctx.res, 403, '这不是你教的科目');
+  const name = String(ctx.body.name == null ? c.name : ctx.body.name).trim().slice(0, 20);
+  if (!name) return fail(ctx.res, 1001, '课程名称不能为空');
+  const dup = await repo.courses.byName(c.subjectId, name);
+  if (dup && dup.id !== c.id) return fail(ctx.res, 3018, `已经有「${name}」了`);
+  ok(ctx.res, await repo.courses.update(c.id, { name, sort: ctx.body.sort, active: ctx.body.active }));
+}, { roles: ['teacher', 'admin'] });
+
+on('DELETE', '/api/courses/:id', async (ctx) => {
+  const c = await repo.courses.byId(ctx.params.id);
+  if (!c) return fail(ctx.res, 3018, '课程不存在');
+  if (!await canTouchSubject(ctx.user, c.subjectId)) return fail(ctx.res, 403, '这不是你教的科目');
+  const usage = await repo.courses.usage(c.id);
+  if (usage.classes + usage.packages) {
+    return fail(ctx.res, 3018, `还有 ${usage.classes} 个班、${usage.packages} 个课包在用这门课程，改名就行，别删`);
+  }
+  await repo.courses.remove(c.id);
+  ok(ctx.res, { ok: true });
+}, { roles: ['teacher', 'admin'] });
+
+/* ---------- 机构联系方式：电话、地址、微信二维码 ---------- */
+const CONTACT_KEY = 'contact';
+async function contactView() {
+  const c = (await repo.settings.get(CONTACT_KEY, null)) || {};
+  return { phone: c.phone || '', address: c.address || '', hours: c.hours || '',
+    qr: c.qrId ? (await assetView(c.qrId) || {}).url || '' : '', note: c.note || '' };
+}
+
+on('GET', '/api/contact', async (ctx) => ok(ctx.res, await contactView()), { auth: false });
+
+on('PUT', '/api/admin/contact', async (ctx) => {
+  const cur = (await repo.settings.get(CONTACT_KEY, null)) || {};
+  let qrId = cur.qrId || null;
+  if (ctx.body.qrBase64) {
+    const img = decodeImage(ctx.body.qrBase64, 5 * 1024 * 1024);
+    if (img.error) return fail(ctx.res, 1001, '二维码图片：' + img.error);
+    const { asset } = await putAssetBuf('photo', img.buf, img.ext, { mime: 'image/' + img.ext });
+    qrId = asset.id;
+  }
+  if (ctx.body.removeQr) qrId = null;
+  await repo.settings.set(CONTACT_KEY, {
+    phone: String(ctx.body.phone == null ? cur.phone || '' : ctx.body.phone).trim().slice(0, 30),
+    address: String(ctx.body.address == null ? cur.address || '' : ctx.body.address).trim().slice(0, 120),
+    hours: String(ctx.body.hours == null ? cur.hours || '' : ctx.body.hours).trim().slice(0, 60),
+    note: String(ctx.body.note == null ? cur.note || '' : ctx.body.note).trim().slice(0, 100),
+    qrId,
+  });
+  ok(ctx.res, await contactView());
+}, { roles: ['admin'] });
+
 /* ================= 多科目：题目作业 ================= */
 on('POST', '/api/homeworks/questions', async (ctx) => {
   const { classId, subjectId, title, note, deadline } = ctx.body;
@@ -1347,6 +1455,8 @@ on('GET', '/api/classes/:id/attendance', async (ctx) => {
   });
   ok(ctx.res, { date, className: cls.name, subject: subjectView(await repo.subjects.byId(cls.subjectId)),
     defaultHours: await repo.settings.get('hours_class_' + cls.id, 1),
+    scheduleText: schedule.text(cls.schedule), meetsOn: schedule.meetsOn(cls.schedule, date),
+    hasSchedule: !!schedule.clean(cls.schedule),
     students, dates: await repo.attendance.datesOfClass(cls.id, 10) });
 }, { roles: ['teacher', 'admin'] });
 
@@ -1486,8 +1596,12 @@ on('GET', '/api/admin/dashboard', async (ctx) => {
     const c = byId.get(id);
     if (!c) continue;
     classes.push({ id: c.id, name: c.name, subject: subjectView(subs.find((x) => x.id === c.subjectId)),
-      studentCount: counts.get(c.id) || 0, marked: marked.has(c.id) });
+      studentCount: counts.get(c.id) || 0, marked: marked.has(c.id),
+      scheduleText: schedule.text(c.schedule), meetsToday: schedule.meetsOn(c.schedule, date),
+      nextClassAt: schedule.nextMeeting(c.schedule, date) });
   }
+  // 今天有课的排前面，其次是没排期的，最后是今天没课的
+  classes.sort((a, b) => (b.meetsToday - a.meetsToday) || ((a.scheduleText ? 1 : 0) - (b.scheduleText ? 1 : 0)));
 
   // 课时预警：剩 4 课时以内，或 30 天内到期
   const onlyIds = await visibleStudentIds(ctx.user);

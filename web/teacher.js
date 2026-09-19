@@ -19,7 +19,11 @@
     board: '<rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M8 9h8M8 13h8M8 17h4"/>',
   };
 
-  function go(v, d) { Clip.stop(); player.stop(); S.view = v; Object.assign(S, d || {}); render(); }
+  function go(v, d) {
+    Clip.stop(); player.stop();
+    if (v !== 'classform') S.formFor = null;          // 离开建班表单，下次进来重新初始化
+    S.view = v; Object.assign(S, d || {}); render();
+  }
 
   let renderSeq = 0;
   function render() {
@@ -62,6 +66,7 @@
   });
   document.addEventListener('change', async (e) => {
     const el = e.target;
+    if (el.name === 'c-subj') { S.formSubj = Number(el.value); S.formCourse = null; refreshCourses(); return; }
     if (el.id === 'f-class' && S.view === 'hwnew') {
       S.newClassId = Number(el.value);
       const title = document.getElementById('f-title'), note = document.getElementById('f-note');
@@ -121,6 +126,7 @@
       if (d.pendingRewards) todo.push(['rewards', '奖品待发放', d.pendingRewards, '去发放', 'mint']);
       if (admin && d.newLeads) todo.push(['leads', '新咨询', d.newLeads, '去联系家长', 'sky']);
       const unmarked = d.classes.filter((c) => !c.marked && c.studentCount);
+      const todayClasses = d.classes.filter((c) => c.meetsToday);
 
       return `<div class="hello">
         <h2>${esc(d.name)}，${greet()}！</h2>
@@ -129,10 +135,12 @@
 
       <div class="card">
         <div class="row between mb"><div class="section-title">今天的点名</div>
-          <span class="muted small">${d.classes.length - unmarked.length}/${d.classes.length} 个班已点</span></div>
+          <span class="muted small">${todayClasses.length ? `今天有课 ${todayClasses.length} 个班 · 已点 ${todayClasses.filter((c) => c.marked).length}` : `${d.classes.length - unmarked.length}/${d.classes.length} 个班已点`}</span></div>
         ${d.classes.length ? `<div class="rollgrid">${d.classes.map((c) => `
-          <button class="rollchip ${c.marked ? 'done' : ''}" data-go="roll" data-arg='${JSON.stringify({ clsId: c.id, rollDate: null })}'>
-            <b>${esc(c.name)}</b><span>${c.marked ? '已点名' : `${c.studentCount} 人待点名`}</span></button>`).join('')}</div>`
+          <button class="rollchip ${c.marked ? 'done' : ''} ${c.meetsToday || !c.scheduleText ? '' : 'off'}" data-go="roll" data-arg='${JSON.stringify({ clsId: c.id, rollDate: null })}'>
+            <b>${esc(c.name)}</b><span>${c.marked ? '已点名'
+              : c.meetsToday ? `${c.studentCount} 人待点名`
+              : c.scheduleText ? `${esc(c.scheduleText)}` : `${c.studentCount} 人待点名`}</span></button>`).join('')}</div>`
           : '<div class="muted small">还没有班级，先去「班级」里建一个</div>'}
       </div>
 
@@ -164,6 +172,20 @@
     },
   };
 
+  const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
+
+  /** 某个科目下面的课程选择条：点一下选中，再点取消；末尾可以新建 */
+  function courseChips(subjects, subjectId, courseId) {
+    const sub = subjects.find((x) => x.id === Number(subjectId));
+    const list = (sub && sub.courses) || [];
+    return `<div class="chips">
+      ${list.map((c) => `<button class="fchip ${Number(courseId) === c.id ? 'on' : ''}" data-act="pickCourse" data-id="${c.id}">${esc(c.name)}</button>`).join('')}
+      <button class="fchip add" data-act="newCourse" data-subj="${subjectId || ''}">+ 新课程</button>
+      ${list.length && courseId ? `<button class="fchip" data-act="renameCourse" data-id="${courseId}">改名</button>` : ''}
+    </div>
+    ${list.length ? '' : '<div class="muted small mt">这个科目还没有分课程，点「+ 新课程」可以加，比如「新概念英语」「自然拼读」</div>'}`;
+  }
+
   /* ---------- 班级：按科目开班，同一科目按年级段分班 ---------- */
   const CLASSES = {
     top: () => `<h1><img src="brand/logo-96.png" alt="">班级</h1><button class="btn sm ghost" data-go="classform" data-arg='{"clsId":null}'>+ 新建</button>`, tab: true,
@@ -193,7 +215,9 @@
               <div class="row" style="gap:6px">
                 <button class="btn sm mint" data-go="roll" data-arg='${JSON.stringify({ clsId: c.id, rollDate: null })}'>点名</button>
                 <button class="btn sm grey" data-go="classform" data-arg='${JSON.stringify({ clsId: c.id })}'>管理</button></div></div>
+            <div class="muted small">${c.course ? esc(c.course.name) : ''}${c.scheduleText ? `${c.course ? ' · ' : ''}${esc(c.scheduleText)}` : ''}</div>
             <div class="row mt" style="gap:6px;flex-wrap:wrap">${c.gradeBand ? `<span class="pill">${esc(c.gradeBand)}</span>` : ''}
+              ${c.meetsToday ? '<span class="pill ok">今天有课</span>' : ''}
               <span class="pill blue">邀请码 ${esc(c.inviteCode)}</span><span class="muted small">${ss.length} 名学生</span>
               ${isAdmin() && c.teacherName ? `<span class="muted small">· ${esc(c.teacherName)}</span>` : ''}</div>
             ${ss.length ? `<div class="hr"></div>${ss.map((st, i) => `<div class="row between" style="padding:5px 0">
@@ -223,6 +247,14 @@
       // 老师只能开自己教的科目；负责人不限
       const myIds = subj.mine || [];
       const subjList = (!isAdmin() && myIds.length) ? subj.subjects.filter((x) => myIds.includes(x.id)) : subj.subjects;
+      // 只在刚进这个表单时初始化，之后重画（比如新建课程后）不要把已选的清掉
+      const formKey = String(S.clsId || 'new');
+      if (S.formFor !== formKey) {
+        S.formFor = formKey;
+        S.formSubj = subId || (subjList[0] || {}).id;
+        S.formCourse = c ? (c.course && c.course.id) || c.courseId || null : null;
+        S.formSched = c && c.schedule ? { ...c.schedule } : { days: [], start: '', end: '' };
+      }
       const curT = c ? c.teacherId : (Store.user || {}).id;
       const teacherField = staff.length ? `<label class="field"><span>任课老师</span><select id="c-teacher">${
         staff.map((u) => `<option value="${u.id}"${u.id === curT ? ' selected' : ''}>${esc(u.name)}${u.role === 'admin' ? '（负责人）' : ''}</option>`).join('')}</select></label>` : '';
@@ -231,7 +263,15 @@
           <div class="chips">${subjList.map((x) => `<label class="chip ${esc(x.color)}"><input type="radio" name="c-subj" value="${x.id}"${x.id === subId ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('')}</div>
           ${!isAdmin() && !myIds.length ? '<div class="muted small mt">负责人还没给你设科目，现在可以选全部</div>' : ''}</div>
         <div class="field"><span>年级段</span><div class="chips">${bands.map((b) => `<label class="chip"><input type="radio" name="c-band" value="${esc(b)}"${c && c.gradeBand === b ? ' checked' : ''}><span>${esc(b)}</span></label>`).join('')}</div></div>
-        <label class="field"><span>班级名称（可不填，自动叫「三四年级书法班」这样）</span><input id="c-name" value="${c ? esc(c.name) : ''}" placeholder="也可以写上课时间，比如：书法 周六上午班"></label>
+        <div class="field"><span>课程（科目下面的具体课，可不选）</span>
+          <div id="course-box">${courseChips(subj.subjects, S.formSubj, S.formCourse)}</div></div>
+        <div class="field"><span>上课时间（选了之后，教务台会把今天有课的班排在最前面）</span>
+          <div class="chips">${WEEK.map((w, i) => `<label class="chip"><input type="checkbox" data-week="${i}"${S.formSched.days.includes(i) ? ' checked' : ''}><span>周${w}</span></label>`).join('')}</div>
+          <div class="row mt" style="gap:8px"><input id="c-start" type="time" value="${esc(S.formSched.start || '')}" style="width:auto;flex:1">
+            <span class="muted small" style="flex:0 0 auto">到</span>
+            <input id="c-end" type="time" value="${esc(S.formSched.end || '')}" style="width:auto;flex:1"></div>
+          <div class="muted small mt">只选星期、不填时间也行</div></div>
+        <label class="field"><span>班级名称（可不填，自动按「年级段 + 课程」起名）</span><input id="c-name" value="${c ? esc(c.name) : ''}" placeholder="例如：新概念英语 周六上午班"></label>
         ${teacherField}
         <button class="btn block" data-act="saveClass">${c ? '保存' : '创建班级'}</button>
       </div>
@@ -588,6 +628,7 @@
       return `<div class="card">
         <div class="row between"><div class="strong grow ellip">${subjTag(d.subject)}${esc(d.className)}</div>
           <input type="date" id="roll-date" value="${esc(d.date)}" data-act="noop" style="width:148px;flex:0 0 auto"></div>
+        ${d.hasSchedule ? `<div class="muted small mt">${esc(d.scheduleText)}${d.meetsOn ? '' : ' · 这天不是排的上课日，补课或调课照常点名就行'}</div>` : ''}
         <div class="row mt" style="gap:10px"><span class="muted small grow">本次每人扣</span>
           <input id="roll-hours" type="number" min="0.5" max="10" step="0.5" value="${d.defaultHours || 1}" style="width:88px;text-align:center"> <span class="muted small">课时</span></div>
       </div>
@@ -636,10 +677,23 @@
 
   /* ---------- 学校简介 ---------- */
   const ABOUT = {
-    top: () => `<button class="back" data-go="me">‹</button><h1>学校简介</h1>`, noTab: true,
+    top: () => `<button class="back" data-go="me">‹</button><h1>学校信息</h1>`, noTab: true,
     body: async () => {
-      const a = await API.get('/api/about');
+      const [a, ct] = await Promise.all([API.get('/api/about'), API.get('/api/contact')]);
       return `<div class="card">
+        <div class="section-title mb">联系方式（会显示在分享页、预约页和简介页底部）</div>
+        <label class="field"><span>电话</span><input id="ct-phone" value="${esc(ct.phone || '')}" inputmode="tel" placeholder="15131810365"></label>
+        <label class="field"><span>地址</span><textarea id="ct-address" rows="2" placeholder="和平路…福斯特培训学校（8-5、8-6门店）">${esc(ct.address || '')}</textarea></label>
+        <label class="field"><span>营业时间（可不填）</span><input id="ct-hours" value="${esc(ct.hours || '')}" placeholder="周一至周日 9:00–20:00"></label>
+        <div class="field"><span>微信二维码</span>
+          <div class="row" style="gap:12px;align-items:center">
+            ${ct.qr ? `<img class="ct-qr" src="${esc(ct.qr)}" alt="二维码">` : '<div class="ct-qr none">还没传</div>'}
+            <label class="btn sm ghost" style="display:inline-flex">${ct.qr ? '换一张' : '上传二维码'}<input type="file" accept="image/*" id="ct-qr" hidden></label>
+          </div></div>
+        <button class="btn block" data-act="saveContact">保存联系方式</button>
+      </div>
+      <div class="card">
+        <div class="section-title mb">学校简介</div>
         <label class="field"><span>标题</span><input id="ab-title" value="${esc(a.title || '')}" placeholder="福斯特培训学校"></label>
         <label class="field"><span>简介正文</span><textarea id="ab-text" rows="8" placeholder="办学理念、师资、课程、地址电话…">${esc(a.text || '')}</textarea></label>
         <div class="field"><span>图片（最多 6 张，可传学校环境、师资海报）</span>
@@ -901,6 +955,14 @@
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
+  /** 只刷新课程选择条，不动表单里已经填的内容 */
+  async function refreshCourses() {
+    const box = document.getElementById('course-box');
+    if (!box) return;
+    const meta = await API.get('/api/meta', 300000);
+    box.innerHTML = courseChips(meta.subjects, S.formSubj, S.formCourse);
+  }
+
   /** 点名按钮的选中样式 */
   function paintRoll(id, status) {
     const box = document.getElementById('rl-' + id);
@@ -1115,13 +1177,42 @@
         render();
       } catch (e) { toast(e.message, 3200); el.disabled = false; }
     },
+    pickCourse(el) {
+      const id = Number(el.dataset.id);
+      S.formCourse = S.formCourse === id ? null : id;
+      refreshCourses();
+    },
+    async newCourse(el) {
+      const subjectId = Number(el.dataset.subj) || S.formSubj;
+      if (!subjectId) return toast('先选科目');
+      const name = (prompt('课程名称，比如「新概念英语」「奥数思维」') || '').trim();
+      if (!name) return;
+      try {
+        const c = await API.post('/api/courses', { subjectId, name });
+        S.formCourse = c.id;
+        await refreshCourses();               // 只刷课程条，表单里填好的内容不动
+        toast('已添加');
+      } catch (e) { toast(e.message, 3000); }
+    },
+    async renameCourse(el) {
+      const meta = await API.get('/api/meta', 300000);
+      const sub = meta.subjects.find((x) => x.id === Number(S.formSubj));
+      const cur = ((sub && sub.courses) || []).find((c) => c.id === Number(el.dataset.id));
+      const name = (prompt('改成什么名字？', cur ? cur.name : '') || '').trim();
+      if (!name || (cur && name === cur.name)) return;
+      try { await API.put('/api/courses/' + el.dataset.id, { name }); await refreshCourses(); toast('已改名'); }
+      catch (e) { toast(e.message, 3000); }
+    },
     async saveClass(el) {
       const sub = document.querySelector('input[name="c-subj"]:checked');
       const band = document.querySelector('input[name="c-band"]:checked');
       if (!sub) return toast('请选科目');
       if (!band) return toast('请选年级段');
       const tSel = document.getElementById('c-teacher');
-      const body = { subjectId: Number(sub.value), gradeBand: band.value, name: document.getElementById('c-name').value.trim() };
+      const days = [...document.querySelectorAll('[data-week]:checked')].map((x) => Number(x.dataset.week));
+      const body = { subjectId: Number(sub.value), gradeBand: band.value, name: document.getElementById('c-name').value.trim(),
+        courseId: S.formCourse || null,
+        schedule: days.length ? { days, start: document.getElementById('c-start').value, end: document.getElementById('c-end').value } : null };
       if (tSel) body.teacherId = Number(tSel.value);
       el.disabled = true;
       try {
@@ -1362,6 +1453,20 @@
     async leaveNo(el) {
       try { await API.post(`/api/admin/leaves/${el.dataset.id}/reject`); toast('已标记为不准'); render(); }
       catch (e) { toast(e.message); }
+    },
+    async saveContact(el) {
+      const f = document.getElementById('ct-qr').files[0];
+      el.disabled = true;
+      try {
+        const body = {
+          phone: document.getElementById('ct-phone').value.trim(),
+          address: document.getElementById('ct-address').value.trim(),
+          hours: document.getElementById('ct-hours').value.trim(),
+        };
+        if (f) body.qrBase64 = (await compressImage(f, 900, 0.9)).base64;
+        await API.put('/api/admin/contact', body);
+        toast('联系方式已保存'); render();
+      } catch (e) { toast(e.message, 2600); el.disabled = false; }
     },
     async saveAbout(el) {
       const f = document.getElementById('ab-file').files[0];

@@ -439,6 +439,8 @@ if (!db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get()) {
 
 addColumn('classes', 'subject_id', 'INTEGER REFERENCES subjects(id)');
 addColumn('classes', 'grade_band', "TEXT DEFAULT ''");
+addColumn('classes', 'schedule', 'TEXT');                    // 上课排期 JSON：{days:[6],start:'10:00',end:'11:30'}
+addColumn('classes', 'course_id', 'INTEGER REFERENCES courses(id)');   // 具体课程，比如「新概念英语」
 db.prepare('UPDATE classes SET subject_id=? WHERE subject_id IS NULL').run(en.id);   // 升级前的班都是英语班
 
 

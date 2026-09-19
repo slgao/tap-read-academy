@@ -187,8 +187,10 @@
     top: () => `<h1><img src="brand/logo-96.png" alt="">福斯特</h1><span class="star-pill" id="top-stars">${ic('star')}<span>…</span></span>`,
     tab: true,
     body: async () => {
-      const [sum, hws] = await Promise.all([API.get('/api/study/summary', 15000), API.get('/api/homeworks', 30000)]);
+      const [sum, hws, myClasses] = await Promise.all([API.get('/api/study/summary', 15000), API.get('/api/homeworks', 30000),
+        API.get('/api/classes', 45000).catch(() => [])]);
       API.prefetch(['/api/books', '/api/listening'], 300000);
+      const todayClasses = myClasses.filter((c) => c.meetsToday);
       const todo = hws.filter((h) => h.status === 'todo' || h.status === 'rejected');
       // 只算今天；sum.days[0] 是最近有记录的一天，不一定是今天
       const todayRow = sum.days.find((d) => d.date === dayKey());
@@ -225,6 +227,10 @@
         <button class="tile star" data-act="poster"><span class="t-ic">${ic('image')}</span><div><b>学习海报</b><span>晒晒我的打卡</span></div></button>
       </div>
 
+      ${todayClasses.length ? `<div class="card tight mb todaycls">
+        <div class="strong">今天有课</div>
+        ${todayClasses.map((c) => `<div class="muted small mt">${subjTag(c.subject)}${esc(c.name)}${c.schedule && c.schedule.start ? ` · ${esc(c.schedule.start)}${c.schedule.end ? '–' + esc(c.schedule.end) : ''}` : ''}</div>`).join('')}
+      </div>` : ''}
       ${todo.length ? `<div class="card">
         <div class="row between mb"><div class="section-title">今日作业</div><span class="pill todo">${todo.length} 项待完成</span></div>
         ${todo.slice(0, 3).map((h, i) => `
@@ -768,7 +774,10 @@
         </div>
         <div class="card"><div class="row between mb"><div class="section-title">我的班级</div>
             <button class="btn sm ghost" data-act="joinClass">+ 加入班级</button></div>
-          ${me.classes.map((c) => `<div class="class-row">${subjTag(c.subject)}<span class="grow ellip">${esc(c.name)}</span>${c.gradeBand ? `<span class="muted small">${esc(c.gradeBand)}</span>` : ''}</div>`).join('')
+          ${me.classes.map((c) => `<div class="class-row">${subjTag(c.subject)}
+            <span class="grow"><span class="ellip">${esc(c.name)}</span>
+              ${c.scheduleText ? `<br><span class="muted small">${esc(c.scheduleText)}${c.meetsToday ? ' · 今天有课' : c.nextClassAt ? ` · 下次 ${esc(c.nextClassAt.slice(5))}` : ''}</span>` : ''}</span>
+            ${c.gradeBand ? `<span class="muted small">${esc(c.gradeBand)}</span>` : ''}</div>`).join('')
             || '<div class="muted small">向老师要班级邀请码，报了几个科目就加入几个班</div>'}
         </div>
         <div class="card"><div class="row between"><div><div class="section-title">学习海报</div>

@@ -85,6 +85,22 @@ async function subjectChips(selected) {
   }).join('');
 }
 
+/** 页脚的联系方式：电话、地址、微信二维码 */
+async function contactBlock() {
+  const c = (await repo.settings.get('contact', null)) || {};
+  const qr = c.qrId ? await repo.assets.byId(c.qrId) : null;
+  if (!c.phone && !c.address && !qr) return '';
+  return `<section class="card pub-contact">
+    <h2 class="section-title">联系我们</h2>
+    ${c.phone ? `<p class="contact-line"><b>电话</b><a href="tel:${esc(c.phone)}">${esc(c.phone)}</a></p>` : ''}
+    ${c.address ? `<p class="contact-line"><b>地址</b><span>${esc(c.address)}</span></p>` : ''}
+    ${c.hours ? `<p class="contact-line"><b>时间</b><span>${esc(c.hours)}</span></p>` : ''}
+    ${qr ? `<div class="contact-qr"><img src="${esc(store.urlOf(qr.relPath))}" alt="微信二维码" loading="lazy">
+      <span class="muted">长按二维码加微信</span></div>` : ''}
+    ${c.note ? `<p class="muted">${esc(c.note)}</p>` : ''}
+  </section>`;
+}
+
 async function leadForm({ token = '', source = 'share', subjectCode = '' }) {
   const sub = subjectCode ? await repo.subjects.byCode(subjectCode) : null;
   const grades = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级', '初一', '初二', '初三', '其他'];
@@ -157,6 +173,7 @@ async function sharePage(req, res, url, token) {
       <a class="btn ghost block" href="/gallery">看看更多书法作品</a>
     </section>` : ''}
     ${await leadForm({ token: share.token, source: 'share', subjectCode: subject ? subject.code : '' })}
+    ${await contactBlock()}
     ${guide ? `<div class="share-guide" id="share-guide" role="dialog" aria-label="分享方法">
         <div class="arrow"></div>
         <div class="tip"><b>点右上角「···」</b><br>选「发送给朋友」或「分享到朋友圈」</div>
@@ -188,7 +205,8 @@ async function galleryPage(req, res) {
         ${w.comment ? `<span>${esc(w.comment.slice(0, 26))}${w.comment.length > 26 ? '…' : ''}</span>` : ''}
       </a>`).join('')}</section>`
     : `<section class="card center"><p class="muted">作品正在陆续上墙，过几天再来看看。</p></section>`}
-    ${await leadForm({ source: 'gallery', subjectCode: 'calli' })}`;
+    ${await leadForm({ source: 'gallery', subjectCode: 'calli' })}
+    ${await contactBlock()}`;
   send(res, 200, page(req, {
     title: `书法作品展 · ${SCHOOL}`, description: `${SCHOOL}同学们的优秀书法作品`,
     image: works[0] ? works[0].photo : null, body,
@@ -209,6 +227,7 @@ async function aboutPage(req, res) {
     ${images.length ? `<section class="pub-photos about-photos">${images.map((u) => `<button class="pub-photo wide" data-src="${esc(u)}"><img src="${esc(u)}" alt="学校照片" loading="lazy"></button>`).join('')}</section>` : ''}
     ${text ? `<section class="card"><div class="about-text">${text.split(/\n+/).map((line) => `<p>${esc(line)}</p>`).join('')}</div></section>`
       : '<section class="card center"><p class="muted">简介整理中，欢迎先预约一节试听课。</p></section>'}
+    ${await contactBlock()}
     ${await leadForm({ source: 'trial' })}`;
   send(res, 200, page(req, { title: `${title} · 学校简介`, description: text.slice(0, 60) || `${SCHOOL}，成为孩子期待的一堂课`,
     image: images[0] || null, body }));
@@ -220,7 +239,8 @@ async function trialPage(req, res) {
       <h1>预约试听</h1>
       <p class="muted">英语、语文、数学、书法、作业班，留下联系方式，老师为孩子安排一节试听课。</p>
     </section>
-    ${await leadForm({ source: 'trial' })}`;
+    ${await leadForm({ source: 'trial' })}
+    ${await contactBlock()}`;
   send(res, 200, page(req, { title: `预约试听 · ${SCHOOL}`, description: '英语、语文、数学、书法、作业班，预约一节试听课', body }));
 }
 
