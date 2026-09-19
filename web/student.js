@@ -53,6 +53,15 @@
     document.getElementById('app').appendChild(m);
   }
 
+  /** 这台手机的标识：只用来防止同一个人反复用不同名字进班，不含任何个人信息 */
+  const deviceId = (() => {
+    try {
+      let d = localStorage.getItem('tap_read_device');
+      if (!d) { d = 'd' + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('tap_read_device', d); }
+      return d;
+    } catch { return ''; }
+  })();
+
   const S = { view: 'home', book: null, catalog: null, page: null, hw: null, showHs: false, repeat: false, recs: {}, ans: {}, subj: '' };
   let accum = 0, pending = 0;
 
@@ -164,22 +173,55 @@
   const LOGIN = {
     top: () => `<h1>学生登录</h1>`,
     noTab: true,
-    body: () => `
-      <div class="login-brand">
-        <img src="brand/logo-192.png" alt="福斯特培训学校校徽">
-        <div class="name">福斯特培训学校</div>
-        <div class="en">FIRST TRAINING SCHOOL</div>
-        <div class="tag"><span style="background:var(--sky-wash);color:var(--sky-shade)">点读课文</span><span style="background:var(--mint-wash);color:var(--mint-shade)">英语听力</span><span style="background:var(--coral-wash);color:var(--coral-shade)">各科作业</span><span style="background:var(--star-wash);color:#8A5A00">每日打卡</span></div>
-      </div>
-      <div class="card">
-        <label class="field"><span>姓名</span><input id="i-name" placeholder="例如：李小明" value="李小明" autocomplete="name"></label>
-        <label class="field"><span>班级邀请码</span><input id="i-code" placeholder="向老师要 6 位邀请码" value="DEMO88" style="text-transform:uppercase"></label>
-        <button class="btn block" data-act="login">进入学习</button>
-      </div>
-      <div class="muted small center">演示账号：李小明 / 张小红 / 刘小刚，邀请码 DEMO88</div>
-      <div class="muted small center mt">${window.DEMO_MODE
-        ? '这是体验版，学习记录只保存在你自己的手机上'
-        : '浏览器预览版，微信小程序代码在 mvp/miniprogram/'}</div>`,
+    body: () => {
+      const brand = `
+        <div class="login-brand">
+          <img src="brand/logo-192.png" alt="福斯特培训学校校徽">
+          <div class="name">福斯特培训学校</div>
+          <div class="en">FIRST TRAINING SCHOOL</div>
+          <div class="tag"><span style="background:var(--sky-wash);color:var(--sky-shade)">点读课文</span><span style="background:var(--mint-wash);color:var(--mint-shade)">英语听力</span><span style="background:var(--coral-wash);color:var(--coral-shade)">各科作业</span><span style="background:var(--star-wash);color:#8A5A00">每日打卡</span></div>
+        </div>`;
+      // 第二步：老师的名单
+      if (S.joinPreview) {
+        const p = S.joinPreview;
+        return `${brand}
+          <div class="card">
+            <div class="row between mb"><div class="section-title">${subjTag(p.subject)}${esc(p.className)}</div>
+              <button class="btn sm grey" data-act="backToCode">换班级</button></div>
+            ${p.names.length ? `<div class="muted small mb">在下面找到你的名字，点一下就能进</div>
+              <div class="namegrid">${p.names.map((n) => `<button class="namebtn" data-act="claimName" data-id="${n.id}">${esc(n.name)}</button>`).join('')}</div>`
+              : '<div class="muted small mb">老师还没把名单建好</div>'}
+            <div class="hr"></div>
+            <label class="field"><span>名单里没有我的名字</span>
+              <input id="i-name" placeholder="写上你的真名，例如：李小明" autocomplete="name"></label>
+            <button class="btn block grey" data-act="askJoin">申请加入，等老师确认</button>
+          </div>`;
+      }
+      // 第一步：邀请码
+      return `${brand}
+        <div class="card">
+          <label class="field"><span>班级邀请码</span>
+            <input id="i-code" placeholder="向老师要 6 位邀请码" value="${esc(S.lastCode || '')}" style="text-transform:uppercase" autocomplete="off"></label>
+          <button class="btn block" data-act="checkCode">下一步</button>
+          <div class="muted small mt center">以前用过的同学，输入邀请码后点自己的名字即可</div>
+        </div>
+        <div class="muted small center mt">${window.DEMO_MODE
+          ? '这是体验版，学习记录只保存在你自己的手机上'
+          : '浏览器预览版，微信小程序代码在 mvp/miniprogram/'}</div>`;
+    },
+  };
+
+  /* ---------- 等老师确认 ---------- */
+  const PENDING = {
+    top: () => `<h1>等老师确认</h1>`,
+    noTab: true,
+    body: () => `<div class="card center" style="padding:28px 18px">
+        <div class="bigcode">⏳</div>
+        <div class="section-title mt">已经交给${esc(S.pendingClass || '老师')}了</div>
+        <p class="muted">老师在手机上点一下「同意」，你就能进班做作业了。可以先去问问老师。</p>
+        <button class="btn block mt" data-act="recheck">我已经问过了，刷新看看</button>
+        <button class="btn block grey mt" data-act="logout">换个名字重来</button>
+      </div>`,
   };
 
   /* ---------- 首页 ---------- */
@@ -1205,15 +1247,18 @@
     return `<div class="seal-row mt" aria-label="近 7 天打卡">${cells.join('')}</div>`;
   }
 
-  const VIEWS = { login: LOGIN, home: HOME, shelf: SHELF, catalog: CATALOG, reader: READER, hwlist: HWLIST, hwdetail: HWDETAIL, me: ME, listenlist: LISTENLIST, listen: LISTEN };
+  const VIEWS = { login: LOGIN, pending: PENDING, home: HOME, shelf: SHELF, catalog: CATALOG, reader: READER, hwlist: HWLIST, hwdetail: HWDETAIL, me: ME, listenlist: LISTENLIST, listen: LISTEN };
 
   /* ---------- 动作 ---------- */
   const ACT = {
     async joinClass() {
       const code = (prompt('输入老师给的班级邀请码') || '').trim();
       if (!code) return;
-      try { const c = await API.post('/api/classes/join', { inviteCode: code }); toast(`已加入「${c.name}」`); render(); }
-      catch (e) { toast(e.message); }
+      try {
+        const c = await API.post('/api/classes/join', { inviteCode: code, device: deviceId });
+        toast(c.join && c.join.status === 'pending' ? `已申请加入「${c.name}」，等老师确认` : `已加入「${c.name}」`, 2800);
+        render();
+      } catch (e) { toast(e.message, 2600); }
     },
     pickSubj(el) { S.subj = el.dataset.code; render(); },
     async askLeave() {
@@ -1373,14 +1418,40 @@
     },
     closeCelebrate() { const m = document.getElementById('celebrate'); if (m) m.remove(); },
     closePoster() { closePoster(); },
-    async login() {
-      const name = document.getElementById('i-name').value.trim();
+    async checkCode() {
       const code = document.getElementById('i-code').value.trim().toUpperCase();
-      if (!name) return toast('请填写姓名');
+      if (!code) return toast('请先输入邀请码');
       try {
-        const d = await API.post('/api/auth/dev-login', { role: 'student', name, inviteCode: code });
+        S.lastCode = code;
+        S.joinPreview = await API.post('/api/classes/preview', { inviteCode: code });
+        render();
+      } catch (e) { toast(e.message, 2600); }
+    },
+    backToCode() { S.joinPreview = null; render(); },
+    async claimName(el) {
+      try {
+        const d = await API.post('/api/auth/claim', { inviteCode: S.lastCode, studentId: Number(el.dataset.id), device: deviceId });
         Store.token = d.token; Store.user = d.user;
+        S.joinPreview = null;
         go('home');
+      } catch (e) { toast(e.message, 3000); }
+    },
+    async askJoin() {
+      const name = document.getElementById('i-name').value.trim();
+      if (!name) return toast('请写上你的名字');
+      try {
+        const d = await API.post('/api/auth/login', { role: 'student', name, inviteCode: S.lastCode, device: deviceId });
+        Store.token = d.token; Store.user = d.user;
+        S.joinPreview = null;
+        if (d.join && d.join.status === 'pending') { S.pendingClass = d.join.className; go('pending'); }
+        else go('home');
+      } catch (e) { toast(e.message, 3000); }
+    },
+    async recheck() {
+      try {
+        const me = await API.get('/api/me');
+        if (me.classes.length) { toast('老师同意了，欢迎回来'); go('home'); }
+        else toast('老师还没点确认，再等等', 2600);
       } catch (e) { toast(e.message); }
     },
     logout() { Store.clear(); go('login'); },
@@ -1460,7 +1531,10 @@
   /* ---------- 启动 ---------- */
   (async function boot() {
     if (!Store.token) return go('login');
-    try { await API.get('/api/me'); go('home'); }
-    catch { go('login'); }
+    try {
+      const me = await API.get('/api/me');
+      if (!me.classes.length) { S.pendingClass = ''; return go('pending'); }   // 还没被老师确认
+      go('home');
+    } catch { go('login'); }
   })();
 })();

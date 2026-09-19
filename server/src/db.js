@@ -418,6 +418,11 @@ CREATE INDEX IF NOT EXISTS idx_redemption_student ON redemptions(student_id, id)
 `);
 
 // 跟进用：下次跟进日期、约好的试听日期、最近一次联系时间
+// 入班要老师确认：学生自己申请进来的先是 pending，老师同意后才算班里的人
+addColumn('class_members', 'status', "TEXT DEFAULT 'active'");
+addColumn('class_members', 'device', 'TEXT');
+addColumn('users', 'device', 'TEXT');          // 学生账号绑定的手机，防止一个人反复用不同名字进班
+
 addColumn('courses', 'public', 'INTEGER DEFAULT 0');   // 是否显示在家长预约页上
 // 预约页先只放英语这几门，其余以后按需打开
 const pubCourses = ['小学英语', '初中英语', '新概念英语', '启蒙英语'];

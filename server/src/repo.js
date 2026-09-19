@@ -37,7 +37,7 @@ const mapBy = (rows, key, val) => {
 const toUser = (r) => r && ({
   id: r.id, openid: r.openid, role: r.role, name: r.name, avatar: r.avatar,
   stars: r.stars, streak: r.streak, lastCheckin: r.last_checkin, createdAt: r.created_at,
-  loginCode: r.login_code, loginCodeEnc: r.login_code_enc, active: r.active == null ? 1 : r.active,
+  loginCode: r.login_code, loginCodeEnc: r.login_code_enc, active: r.active == null ? 1 : r.active, device: r.device || '',
 });
 const toClass = (r) => r && ({
   id: r.id, name: r.name, inviteCode: r.invite_code, teacherId: r.teacher_id, createdAt: r.created_at,
@@ -123,6 +123,11 @@ const users = {
     q('UPDATE users SET login_code=?, login_code_enc=? WHERE id=?').run(hash, enc || null, num(id));
   },
   async setActive(id, on) { q('UPDATE users SET active=? WHERE id=?').run(on ? 1 : 0, num(id)); },
+  async bindDevice(id, device) { q('UPDATE users SET device=? WHERE id=?').run(device || '', num(id)); },
+  async countByDevice(device, sinceTime) {
+    if (!device) return 0;
+    return count("SELECT COUNT(*) n FROM users WHERE role='student' AND device=? AND created_at >= ?", device, sinceTime);
+  },
   async setRole(id, role) { q('UPDATE users SET role=? WHERE id=?').run(role, num(id)); },
   async rename(id, name) { q('UPDATE users SET name=? WHERE id=?').run(name, num(id)); },
   async countStudentsSince(date) { return count("SELECT COUNT(*) n FROM users WHERE role='student' AND created_at >= ?", date); },
@@ -165,7 +170,7 @@ const classes = {
   async all() { return q('SELECT * FROM classes').all().map(toClass); },
   /** 学生看自己加入的班，老师看自己带的班，负责人看全校 */
   async idsForUser(user) {
-    if (user.role === 'student') return q('SELECT class_id AS id FROM class_members WHERE student_id=?').all(num(user.id)).map((r) => r.id);
+    if (user.role === 'student') return q("SELECT class_id AS id FROM class_members WHERE student_id=? AND status='active'").all(num(user.id)).map((r) => r.id);
     if (user.role === 'admin') return q('SELECT id FROM classes ORDER BY id').all().map((r) => r.id);
     return q('SELECT id FROM classes WHERE teacher_id=?').all(num(user.id)).map((r) => r.id);
   },
@@ -209,21 +214,56 @@ const classes = {
     q('DELETE FROM class_members WHERE class_id=? AND student_id=?').run(num(classId), num(studentId));
   },
   async inviteCodeTaken(code) { return !!q('SELECT 1 x FROM classes WHERE invite_code=?').get(code); },
-  async addMember(classId, studentId) {
-    q('INSERT OR IGNORE INTO class_members (class_id, student_id, joined_at) VALUES (?,?,?)').run(num(classId), num(studentId), now());
+  async addMember(classId, studentId, { status = 'active', device = '' } = {}) {
+    q('INSERT OR IGNORE INTO class_members (class_id, student_id, joined_at, status, device) VALUES (?,?,?,?,?)')
+      .run(num(classId), num(studentId), now(), status, device || '');
+    if (status === 'active') q("UPDATE class_members SET status='active' WHERE class_id=? AND student_id=?").run(num(classId), num(studentId));
+  },
+  async memberStatus(classId, studentId) {
+    const r = q('SELECT status FROM class_members WHERE class_id=? AND student_id=?').get(num(classId), num(studentId));
+    return r ? (r.status || 'active') : null;
+  },
+  async setMemberStatus(classId, studentId, status) {
+    q('UPDATE class_members SET status=? WHERE class_id=? AND student_id=?').run(status, num(classId), num(studentId));
+  },
+  /** 待老师确认的入班申请 */
+  async pendingJoins(classIds) {
+    if (!classIds.length) return [];
+    return q(`SELECT m.class_id, m.student_id, m.joined_at, m.device, u.name, c.name AS class_name
+              FROM class_members m JOIN users u ON u.id=m.student_id JOIN classes c ON c.id=m.class_id
+              WHERE m.status='pending' AND m.class_id IN (${marks(classIds)})
+              ORDER BY m.joined_at DESC`).all(...classIds.map(num))
+      .map((r) => ({ classId: r.class_id, studentId: r.student_id, name: r.name, className: r.class_name,
+        device: r.device || '', at: r.joined_at }));
+  },
+  async countPendingJoins(classIds) {
+    if (!classIds.length) return 0;
+    return count(`SELECT COUNT(*) n FROM class_members WHERE status='pending' AND class_id IN (${marks(classIds)})`, ...classIds.map(num));
+  },
+  /** 名单上还没人认领的名字（老师先建了档，学生进来点自己的名字） */
+  async unclaimed(classId) {
+    return q(`SELECT u.id, u.name FROM class_members m JOIN users u ON u.id=m.student_id
+              WHERE m.class_id=? AND m.status='active' AND (u.device IS NULL OR u.device='')
+              ORDER BY u.name`).all(num(classId)).map((r) => ({ id: r.id, name: r.name }));
+  },
+  /** 同一台手机最近提交过几次申请 */
+  async deviceJoinCount(device, sinceTime) {
+    if (!device) return 0;
+    return count('SELECT COUNT(*) n FROM class_members WHERE device=? AND joined_at >= ?', device, sinceTime);
   },
   /** 班级学生名单，按星星降序 */
   async members(classId) {
     return q(`SELECT u.id, u.name, u.stars, u.streak FROM class_members m
-              JOIN users u ON u.id=m.student_id WHERE m.class_id=? ORDER BY u.stars DESC`).all(num(classId));
+              JOIN users u ON u.id=m.student_id WHERE m.class_id=? AND m.status='active'
+              ORDER BY u.stars DESC`).all(num(classId));
   },
-  async memberCount(classId) { return count('SELECT COUNT(*) n FROM class_members WHERE class_id=?', num(classId)); },
+  async memberCount(classId) { return count("SELECT COUNT(*) n FROM class_members WHERE class_id=? AND status='active'", num(classId)); },
   /** 多个班的名单一次取完：classId -> [{id,name,stars,streak}] */
   async membersOfMany(classIds) {
     const out = new Map();
     if (!classIds.length) return out;
     const rows = q(`SELECT m.class_id, u.id, u.name, u.stars, u.streak FROM class_members m
-                    JOIN users u ON u.id=m.student_id WHERE m.class_id IN (${marks(classIds)})
+                    JOIN users u ON u.id=m.student_id WHERE m.class_id IN (${marks(classIds)}) AND m.status='active'
                     ORDER BY u.stars DESC`).all(...classIds.map(num));
     for (const r of rows) {
       const arr = out.get(r.class_id) || out.set(r.class_id, []).get(r.class_id);
@@ -233,8 +273,8 @@ const classes = {
   },
   /** 一个学生在哪些班：一条查询代替遍历全校班级 */
   async forStudent(studentId) {
-    return q(`SELECT c.* FROM classes c JOIN class_members m ON m.class_id=c.id WHERE m.student_id=? ORDER BY c.id`)
-      .all(num(studentId)).map(toClass);
+    return q(`SELECT c.* FROM classes c JOIN class_members m ON m.class_id=c.id
+              WHERE m.student_id=? AND m.status='active' ORDER BY c.id`).all(num(studentId)).map(toClass);
   },
   /** 每位老师名下的班数：teacherId -> 个数 */
   async countsByTeacher() {
@@ -243,7 +283,7 @@ const classes = {
   /** 这些班里的所有学生 id（老师的可见范围） */
   async studentIdsOfClasses(classIds) {
     if (!classIds.length) return [];
-    return [...new Set(q(`SELECT DISTINCT student_id FROM class_members WHERE class_id IN (${marks(classIds)})`)
+    return [...new Set(q(`SELECT DISTINCT student_id FROM class_members WHERE class_id IN (${marks(classIds)}) AND status='active'`)
       .all(...classIds.map(num)).map((r) => r.student_id))];
   },
   /** 一次取多个班（列表页用，避免一个班一条查询） */
@@ -254,7 +294,7 @@ const classes = {
   /** 多个班的人数：classId -> 人数 */
   async memberCounts(ids) {
     if (!ids.length) return new Map();
-    return mapBy(q(`SELECT class_id, COUNT(*) n FROM class_members WHERE class_id IN (${marks(ids)}) GROUP BY class_id`)
+    return mapBy(q(`SELECT class_id, COUNT(*) n FROM class_members WHERE class_id IN (${marks(ids)}) AND status='active' GROUP BY class_id`)
       .all(...ids.map(num)), 'class_id', (r) => r.n);
   },
 };
@@ -460,6 +500,7 @@ const submissions = {
   async byHomeworkAndStudent(homeworkId, studentId) {
     return toSubmission(q('SELECT * FROM submissions WHERE homework_id=? AND student_id=?').get(num(homeworkId), num(studentId)));
   },
+  async countByStudent(studentId) { return count('SELECT COUNT(*) n FROM submissions WHERE student_id=?', num(studentId)); },
   async countByHomework(homeworkId) { return count('SELECT COUNT(*) n FROM submissions WHERE homework_id=?', num(homeworkId)); },
   /** 这些班里还等着老师批改的作业份数 */
   async countToReview(classIds) {

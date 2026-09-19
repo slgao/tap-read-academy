@@ -137,13 +137,23 @@ async function login(ctx) {
   const ip = String(ctx.req.headers['x-forwarded-for'] || ctx.req.socket.remoteAddress || '').split(',')[0].trim();
 
   let user;
+  let joinState = null;
   if (role === 'student') {
+    const device = String(ctx.body.device || '').slice(0, 40);
     user = await repo.users.byNameRole(nm, 'student');
-    if (!user) user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'student', name: nm });
+    if (!user) {
+      // 同一台手机一天里最多建三个新账号，挡住"换个名字再来一次"
+      const since = new Date(Date.now() - 86400e3).toISOString().replace('T', ' ').slice(0, 19);
+      if (device && await repo.users.countByDevice(device, since) >= 3) {
+        return fail(ctx.res, 3019, '这台手机今天新建的账号太多了，请让老师把你加进班里');
+      }
+      user = await repo.users.create({ openid: 'dev_' + rid().slice(0, 12), role: 'student', name: nm });
+    }
+    if (device && !user.device) await repo.users.bindDevice(user.id, device);
     if (code) {
       const cls = await repo.classes.byInviteCode(String(code).toUpperCase().trim());
       if (!cls) return fail(ctx.res, 3001, '班级邀请码不存在');
-      await repo.classes.addMember(cls.id, user.id);
+      joinState = await joinClass(cls, user, device);
     }
   } else {
     // 本机直连（没有经过反向代理）不限流：线上请求都带 X-Forwarded-For，这里只放过服务器自己和本地开发
@@ -167,7 +177,22 @@ async function login(ctx) {
   }
   const token = rid() + rid();
   await repo.sessions.create(token, user.id);
-  ok(ctx.res, { token, user: publicUser(user) });
+  ok(ctx.res, { token, user: publicUser(user), ...(joinState ? { join: joinState } : {}) });
+}
+
+/**
+ * 学生进班：名单上已有这个名字（老师建过档）就直接进；
+ * 自己新报的名字先挂起，等老师在「待入班」里确认，防止一个学生用不同名字把班刷满。
+ */
+async function joinClass(cls, user, device) {
+  const cur = await repo.classes.memberStatus(cls.id, user.id);
+  if (cur === 'active') return { status: 'active', className: cls.name };
+  if (cur === 'pending') return { status: 'pending', className: cls.name };
+  // 老师建过档的学生：名单里有他，直接放行
+  const known = (await repo.classes.members(cls.id)).some((m) => m.id === user.id);
+  if (known) return { status: 'active', className: cls.name };
+  await repo.classes.addMember(cls.id, user.id, { status: 'pending', device });
+  return { status: 'pending', className: cls.name };
 }
 
 on('POST', '/api/auth/login', login, { auth: false });
@@ -334,12 +359,70 @@ on('DELETE', '/api/classes/:id/students/:sid', async (ctx) => {
   ok(ctx.res, { ok: true });
 }, { roles: ['teacher', 'admin'] });
 
+/** 输入邀请码后先看到：这是哪个班、名单上还有哪些名字没人认领 */
+on('POST', '/api/classes/preview', async (ctx) => {
+  const cls = await repo.classes.byInviteCode(String(ctx.body.inviteCode || '').toUpperCase().trim());
+  if (!cls) return fail(ctx.res, 3001, '邀请码不对，问一下老师');
+  const subject = await repo.subjects.byId(cls.subjectId);
+  ok(ctx.res, { classId: cls.id, className: cls.name, subject: subjectView(subject),
+    names: await repo.classes.unclaimed(cls.id) });
+}, { auth: false });
+
+/** 点名单上的名字进班：把这个名字和这台手机绑定，别人再点就点不动了 */
+on('POST', '/api/auth/claim', async (ctx) => {
+  const cls = await repo.classes.byInviteCode(String(ctx.body.inviteCode || '').toUpperCase().trim());
+  if (!cls) return fail(ctx.res, 3001, '邀请码不对，问一下老师');
+  const device = String(ctx.body.device || '').slice(0, 40);
+  const u = await repo.users.byId(ctx.body.studentId);
+  if (!u || u.role !== 'student') return fail(ctx.res, 3015, '名单上没有这个人');
+  const members = await repo.classes.members(cls.id);
+  if (!members.some((m) => m.id === u.id)) return fail(ctx.res, 3015, '这个名字不在这个班的名单里');
+  if (u.device && device && u.device !== device) {
+    return fail(ctx.res, 3019, '这个名字已经有人在用了，如果是你本人，请让老师重新确认');
+  }
+  if (device && !u.device) await repo.users.bindDevice(u.id, device);
+  const token = rid() + rid();
+  await repo.sessions.create(token, u.id);
+  ok(ctx.res, { token, user: publicUser(u), join: { status: 'active', className: cls.name } });
+}, { auth: false });
+
 on('POST', '/api/classes/join', async (ctx) => {
   const cls = await repo.classes.byInviteCode(String(ctx.body.inviteCode || '').toUpperCase().trim());
   if (!cls) return fail(ctx.res, 3001, '班级邀请码不存在');
-  await repo.classes.addMember(cls.id, ctx.user.id);
-  ok(ctx.res, await classView(cls));
+  const state = await joinClass(cls, ctx.user, String(ctx.body.device || '').slice(0, 40));
+  ok(ctx.res, { ...(await classView(cls)), join: state });
 }, { roles: ['student'] });
+
+/* ---------- 待入班：老师确认后学生才进班 ---------- */
+on('GET', '/api/admin/join-requests', async (ctx) => {
+  const ids = await repo.classes.idsForUser(ctx.user);
+  const list = await repo.classes.pendingJoins(ids);
+  // 同一台手机提交了好几次，多半是同一个孩子换名字反复进
+  const byDevice = {};
+  for (const r of list) if (r.device) byDevice[r.device] = (byDevice[r.device] || 0) + 1;
+  ok(ctx.res, list.map((r) => ({ ...r, device: undefined, sameDevice: r.device ? byDevice[r.device] : 1 })));
+}, { roles: ['teacher', 'admin'] });
+
+on('POST', '/api/admin/join-requests/:classId/:studentId/:action', async (ctx) => {
+  const cls = await repo.classes.byId(ctx.params.classId);
+  if (!cls) return fail(ctx.res, 3001, '班级不存在');
+  if (!await canTouchClass(ctx.user, cls.id)) return fail(ctx.res, 403, '这不是你带的班');
+  const sid = Number(ctx.params.studentId);
+  if (await repo.classes.memberStatus(cls.id, sid) !== 'pending') return fail(ctx.res, 3019, '这条申请已经处理过了');
+  if (ctx.params.action === 'approve') {
+    await repo.classes.setMemberStatus(cls.id, sid, 'active');
+    return ok(ctx.res, { ok: true, status: 'active' });
+  }
+  if (ctx.params.action === 'reject') {
+    await repo.classes.removeMember(cls.id, sid);
+    // 顺手清掉这个“查无此人”的空账号：没进任何班、也没交过作业才删
+    const u = await repo.users.byId(sid);
+    if (u && u.role === 'student' && !(await repo.classes.forStudent(sid)).length
+      && !(await repo.submissions.countByStudent(sid))) await repo.users.remove(sid);
+    return ok(ctx.res, { ok: true, status: 'rejected' });
+  }
+  fail(ctx.res, 1001, '操作不对');
+}, { roles: ['teacher', 'admin'] });
 
 on('GET', '/api/classes/:id/students', async (ctx) => {
   if (!await canTouchClass(ctx.user, ctx.params.id)) return fail(ctx.res, 403, '看不了别的班的名单');
@@ -1637,6 +1720,7 @@ on('GET', '/api/admin/dashboard', async (ctx) => {
     date, name: ctx.user.name, role: ctx.user.role,
     classes, toReview: await repo.submissions.countToReview(classIds),
     pendingLeaves: await repo.leaves.countPending(onlyIds),
+    pendingJoins: await repo.classes.countPendingJoins(classIds),
     lowHours: lowHours.slice(0, 8), expiring: expiring.slice(0, 8),
     pendingRewards: await repo.redemptions.countPending(),
   };

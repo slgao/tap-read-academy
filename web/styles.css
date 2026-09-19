@@ -721,3 +721,7 @@ td.num.warn{color:var(--coral-shade);font-weight:800}
 .lead-date.blue input{border-color:var(--sky)}
 @media(max-width:900px){.lead-card{grid-template-columns:1fr;grid-template-areas:'main' 'side' 'acts' 'note'}
   .lead-side,.lead-acts{text-align:left;justify-content:flex-start}}
+.namegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
+.namebtn{border:2px solid var(--line);background:var(--paper);border-radius:14px;padding:12px 8px;cursor:pointer;
+  font:700 16px var(--sans);color:var(--ink-deep)}
+.namebtn:active{background:var(--sky-wash);border-color:var(--sky)}

@@ -122,6 +122,7 @@
       const admin = d.role === 'admin';
       const todo = [];
       if (d.toReview) todo.push(['hwlist', '作业待批改', d.toReview, '去批改', 'coral']);
+      if (d.pendingJoins) todo.push(['joins', '学生申请进班', d.pendingJoins, '去确认', 'sky']);
       if (d.pendingLeaves) todo.push(['leaves', '请假待审批', d.pendingLeaves, '去审批', 'star']);
       if (d.pendingRewards) todo.push(['rewards', '奖品待发放', d.pendingRewards, '去发放', 'mint']);
       if (admin && d.newLeads) todo.push(['leads', '新咨询', d.newLeads, '去联系家长', 'sky']);
@@ -661,6 +662,30 @@
     },
   };
 
+  /* ---------- 待入班：学生自己报名进来的，要老师点头 ---------- */
+  const JOINS = {
+    top: () => `<button class="back" data-go="me">‹</button><h1>学生申请进班</h1>`, noTab: true,
+    body: async () => {
+      const list = await API.get('/api/admin/join-requests');
+      if (!list.length) {
+        return `<div class="card tight"><div class="strong">没有待确认的申请</div>
+          <div class="muted small mt">学生用邀请码进班时，如果名单里没有他的名字，就会出现在这里等你确认。
+          先在「学员」里建好名单的话，学生进来直接点自己的名字，不用你确认。</div></div>`;
+      }
+      return `<div class="card tight mb"><div class="muted small">
+        确认之前，这些学生看不到作业，也不会出现在点名名单里。不认识的直接「不是我班的」。</div></div>
+        ${list.map((r) => `<div class="card ${r.sameDevice > 1 ? 'warnbox' : ''}">
+          <div class="row between"><div class="strong">${esc(r.name)}</div>
+            <span class="pill">${esc(r.className)}</span></div>
+          <div class="muted small mt">${fmtDate(r.at)}${r.sameDevice > 1 ? ` · 同一台手机提交了 ${r.sameDevice} 次，可能是同一个孩子换名字重复申请` : ''}</div>
+          <div class="row mt" style="gap:8px">
+            <button class="btn sm grow" data-act="joinOk" data-c="${r.classId}" data-s="${r.studentId}">确认进班</button>
+            <button class="btn sm danger" data-act="joinNo" data-c="${r.classId}" data-s="${r.studentId}" data-name="${esc(r.name)}">不是我班的</button>
+          </div>
+        </div>`).join('')}`;
+    },
+  };
+
   /* ---------- 请假审批 ---------- */
   const LEAVES = {
     top: () => `<button class="back" data-go="me">‹</button><h1>请假审批</h1>`, noTab: true,
@@ -860,6 +885,9 @@
       ${admin ? `<div class="card"><div class="row between mb"><div class="section-title">家长咨询</div>
           <button class="btn sm" data-go="leads">查看</button></div>
         <div class="muted small">分享页和预约页收到的家长预约，只有负责人能看到手机号。</div></div>` : ''}
+      <div class="card"><div class="row between mb"><div class="section-title">学生申请进班</div>
+          <button class="btn sm" data-go="joins">查看</button></div>
+        <div class="muted small">名单里没有的学生自己报名进班时，要你点头才算数——防止孩子用不同名字反复加入。</div></div>
       <div class="card"><div class="row between mb"><div class="section-title">请假审批</div>
           <button class="btn sm" data-go="leaves">查看</button></div>
         <div class="muted small">家长在学生端提交请假，准假后点名时这一天不扣课时。</div></div>
@@ -1113,7 +1141,7 @@
     document.getElementById('app').appendChild(m);
   }
 
-  const VIEWS = { login: LOGIN, home: HOME, classes: CLASSES, classform: CLASSFORM, staff: STAFF, rewards: REWARDS,
+  const VIEWS = { login: LOGIN, home: HOME, joins: JOINS, classes: CLASSES, classform: CLASSFORM, staff: STAFF, rewards: REWARDS,
     students: STUDENTS, student: STUDENT, roll: ROLL, leaves: LEAVES, about: ABOUT, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
 
   /** 把页面上的评分栏读成一个对象；没打分就返回 null（后端会原样清空） */
@@ -1584,6 +1612,15 @@
       if (!confirm(`取消这次兑换？星星会退回给 ${el.dataset.name}`)) return;
       try { const r = await API.post(`/api/admin/redemptions/${el.dataset.id}/cancel`); toast(`已取消，退回 ${r.refunded} 颗星`); render(); }
       catch (e) { toast(e.message); }
+    },
+    async joinOk(el) {
+      try { await API.post(`/api/admin/join-requests/${el.dataset.c}/${el.dataset.s}/approve`); toast('已确认进班'); render(); }
+      catch (e) { toast(e.message, 2600); }
+    },
+    async joinNo(el) {
+      if (!confirm(`「${el.dataset.name}」不是你班上的学生？确认后这条申请会被删掉。`)) return;
+      try { await API.post(`/api/admin/join-requests/${el.dataset.c}/${el.dataset.s}/reject`); toast('已拒绝'); render(); }
+      catch (e) { toast(e.message, 2600); }
     },
     async leadTo(el) {
       const st = el.dataset.st;
