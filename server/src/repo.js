@@ -99,7 +99,7 @@ const toLead = (r) => r && ({
   message: r.message || '', note: r.note, createdAt: r.created_at,
   followAt: r.follow_at || '', trialAt: r.trial_at || '', lastContactAt: r.last_contact_at || '',
 });
-const toCourse = (r) => r && ({ id: r.id, subjectId: r.subject_id, name: r.name, sort: r.sort, active: r.active });
+const toCourse = (r) => r && ({ id: r.id, subjectId: r.subject_id, name: r.name, sort: r.sort, active: r.active, public: !!r.public });
 const toSubItem = (r) => r && ({
   id: r.id, submissionId: r.submission_id, hotspotId: r.hotspot_id,
   assetId: r.asset_id, durationMs: r.duration_ms,
@@ -885,13 +885,17 @@ const courses = {
     const r = q('INSERT INTO courses (subject_id, name, sort) VALUES (?,?,?)').run(num(subjectId), name, num(sort) || 0);
     return courses.byId(Number(r.lastInsertRowid));
   },
-  async update(id, { name, sort, active }) {
+  async update(id, { name, sort, active, isPublic }) {
     const cur = q('SELECT * FROM courses WHERE id=?').get(num(id));
     if (!cur) return null;
-    q('UPDATE courses SET name=?, sort=?, active=? WHERE id=?')
+    q('UPDATE courses SET name=?, sort=?, active=?, public=? WHERE id=?')
       .run(name == null ? cur.name : name, sort == null ? cur.sort : num(sort),
-        active == null ? cur.active : (active ? 1 : 0), num(id));
+        active == null ? cur.active : (active ? 1 : 0),
+        isPublic == null ? cur.public : (isPublic ? 1 : 0), num(id));
     return courses.byId(id);
+  },
+  async publicList() {
+    return q('SELECT * FROM courses WHERE active=1 AND public=1 ORDER BY subject_id, sort, id').all().map(toCourse);
   },
   async remove(id) { q('DELETE FROM courses WHERE id=?').run(num(id)); },
   async usage(id) {

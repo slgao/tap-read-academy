@@ -418,6 +418,14 @@ CREATE INDEX IF NOT EXISTS idx_redemption_student ON redemptions(student_id, id)
 `);
 
 // 跟进用：下次跟进日期、约好的试听日期、最近一次联系时间
+addColumn('courses', 'public', 'INTEGER DEFAULT 0');   // 是否显示在家长预约页上
+// 预约页先只放英语这几门，其余以后按需打开
+const pubCourses = ['小学英语', '初中英语', '新概念英语', '启蒙英语'];
+if (!db.prepare("SELECT 1 x FROM courses WHERE public=1 LIMIT 1").get()) {
+  const up = db.prepare('UPDATE courses SET public=1 WHERE name=?');
+  for (const n of pubCourses) up.run(n);
+}
+
 addColumn('leads', 'follow_at', 'TEXT');
 addColumn('leads', 'trial_at', 'TEXT');
 addColumn('leads', 'last_contact_at', 'TEXT');

@@ -407,8 +407,8 @@ const TAG = '__e2e_' + Date.now();
   check('预约记录带课程小类和家长留言', JSON.stringify(myLead[0].courseNames) === '["小学书法考级"]'
     && myLead[0].message === '孩子周六上午方便', `${myLead[0].courseNames} / ${myLead[0].message}`);
   const trialHtml = await (await fetch(BASE + '/trial')).text();
-  check('预约页有备注栏和标语', /name="message"/.test(trialHtml) && trialHtml.includes('成为孩子期待的一堂课')
-    && trialHtml.includes('小学精品作业班'), '');
+  check('预约页有备注栏、标语和全部科目', /name="message"/.test(trialHtml) && trialHtml.includes('成为孩子期待的一堂课')
+    && trialHtml.includes('作业班'), '');
   const stats = await call('GET', '/api/admin/promo-stats', null, T.token);
   check('宣传数据', stats.last7.shares >= 2 && stats.last7.leads >= 1, JSON.stringify(stats.last7));
 
@@ -732,6 +732,25 @@ const TAG = '__e2e_' + Date.now();
   const leadCsv = await (await fetch(BASE + '/api/admin/export/leads', { headers: { Authorization: 'Bearer ' + T.token } })).text();
   check('导出带上跟进日期和试听日期', leadCsv.includes('下次跟进,试听日期'), '');
   await call('DELETE', `/api/admin/leads/${fLead.id}`, null, T.token);
+
+  log('\n[18] 预约页课程开关与矢量二维码');
+  const pubCourses = (await call('GET', '/api/courses', null, T.token)).filter((c) => c.public);
+  check('预约页默认只放英语那几门', pubCourses.length > 0 && pubCourses.every((c) => c.subject.code === 'en'),
+    pubCourses.map((c) => c.name).join('、'));
+  const trialPage = await (await fetch(BASE + '/trial')).text();
+  check('预约页不显示没开放的课程', !/阅读写作|奥数思维|小学硬笔书法/.test(trialPage) && /新概念英语/.test(trialPage), '');
+
+  const toggleMe = (await call('GET', '/api/courses', null, T.token)).find((c) => !c.public && c.subject.code === 'zh');
+  await call('PUT', `/api/courses/${toggleMe.id}`, { public: true }, T.token);
+  const trial2 = await (await fetch(BASE + '/trial')).text();
+  check('负责人打开开关后就出现在预约页', trial2.includes(toggleMe.name), toggleMe.name);
+  await call('PUT', `/api/courses/${toggleMe.id}`, { public: false }, T.token);
+
+  const svgQr = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>';
+  const withQr = await call('PUT', '/api/admin/contact', { qrSvg: svgQr }, T.token);
+  check('联系方式支持矢量二维码', /\.svg$/.test(withQr.qr || ''), withQr.qr);
+  const badSvg = await expectFail('PUT', '/api/admin/contact', { qrSvg: '<img src=x onerror=alert(1)>' }, T.token);
+  check('不是 SVG 的内容被拒', /格式不对/.test(badSvg || ''), badSvg);
 
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);

@@ -72,7 +72,7 @@ function page(req, { title, description, image, body, bodyClass = '' }) {
 /** 科目 + 科目下面的具体课程；勾了科目才展开它的课程 */
 async function subjectChips(selected) {
   const subs = await repo.subjects.all();
-  const cs = await repo.courses.all();
+  const cs = await repo.courses.publicList();      // 只放负责人勾选过的课程
   return subs.map((x) => {
     const on = selected.includes(x.code);
     const list = cs.filter((c) => c.subjectId === x.id);

@@ -978,7 +978,7 @@ on('GET', '/api/courses', async (ctx) => {
   const out = [];
   for (const c of list) {
     const usage = ctx.user.role === 'student' ? null : await repo.courses.usage(c.id);
-    out.push({ id: c.id, subjectId: c.subjectId, name: c.name, sort: c.sort,
+    out.push({ id: c.id, subjectId: c.subjectId, name: c.name, sort: c.sort, public: c.public,
       subject: subjectView(subs.find((x) => x.id === c.subjectId)),
       ...(usage ? { classCount: usage.classes, canDelete: usage.classes + usage.packages === 0 } : {}) });
   }
@@ -1004,7 +1004,9 @@ on('PUT', '/api/courses/:id', async (ctx) => {
   if (!name) return fail(ctx.res, 1001, '课程名称不能为空');
   const dup = await repo.courses.byName(c.subjectId, name);
   if (dup && dup.id !== c.id) return fail(ctx.res, 3018, `已经有「${name}」了`);
-  ok(ctx.res, await repo.courses.update(c.id, { name, sort: ctx.body.sort, active: ctx.body.active }));
+  // 是否显示在家长预约页上，只有负责人能改
+  const isPublic = (ctx.user.role === 'admin' && ctx.body.public !== undefined) ? ctx.body.public : undefined;
+  ok(ctx.res, await repo.courses.update(c.id, { name, sort: ctx.body.sort, active: ctx.body.active, isPublic }));
 }, { roles: ['teacher', 'admin'] });
 
 on('DELETE', '/api/courses/:id', async (ctx) => {
@@ -1032,7 +1034,14 @@ on('GET', '/api/contact', async (ctx) => ok(ctx.res, await contactView()), { aut
 on('PUT', '/api/admin/contact', async (ctx) => {
   const cur = (await repo.settings.get(CONTACT_KEY, null)) || {};
   let qrId = cur.qrId || null;
-  if (ctx.body.qrBase64) {
+  if (ctx.body.qrSvg) {
+    // 矢量二维码：放大不糊，海报上也能用。只接受 <svg>，并去掉脚本和事件属性
+    const raw = String(ctx.body.qrSvg).trim();
+    if (!raw.startsWith('<svg') || raw.length > 200000) return fail(ctx.res, 1001, '二维码 SVG 格式不对');
+    const safe = raw.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/\son\w+\s*=\s*"[^"]*"/gi, '');
+    const { asset } = await putAssetBuf('photo', Buffer.from(safe, 'utf8'), 'svg', { mime: 'image/svg+xml' });
+    qrId = asset.id;
+  } else if (ctx.body.qrBase64) {
     const img = decodeImage(ctx.body.qrBase64, 5 * 1024 * 1024);
     if (img.error) return fail(ctx.res, 1001, '二维码图片：' + img.error);
     const { asset } = await putAssetBuf('photo', img.buf, img.ext, { mime: 'image/' + img.ext });

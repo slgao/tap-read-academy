@@ -686,7 +686,8 @@
   const ABOUT = {
     top: () => `<button class="back" data-go="me">‹</button><h1>学校信息</h1>`, noTab: true,
     body: async () => {
-      const [a, ct] = await Promise.all([API.get('/api/about'), API.get('/api/contact')]);
+      const [a, ct, courses] = await Promise.all([API.get('/api/about'), API.get('/api/contact'), API.get('/api/courses')]);
+      S.allCourses = courses;
       return `<div class="card">
         <div class="section-title mb">联系方式（会显示在分享页、预约页和简介页底部）</div>
         <label class="field"><span>电话</span><input id="ct-phone" value="${esc(ct.phone || '')}" inputmode="tel" placeholder="15131810365"></label>
@@ -698,6 +699,17 @@
             <label class="btn sm ghost" style="display:inline-flex">${ct.qr ? '换一张' : '上传二维码'}<input type="file" accept="image/*" id="ct-qr" hidden></label>
           </div></div>
         <button class="btn block" data-act="saveContact">保存联系方式</button>
+      </div>
+      <div class="card">
+        <div class="row between mb"><div class="section-title">预约页显示的课程</div>
+          <button class="btn sm" data-act="savePublicCourses">保存</button></div>
+        <div class="muted small mb">家长在预约试听页勾了科目后，只会看到这里打勾的课程。不勾就只显示科目。</div>
+        ${S.allCourses.length ? [...new Set(S.allCourses.map((c) => c.subject && c.subject.name))].map((sn) => `
+          <div class="row" style="gap:8px;align-items:flex-start;margin-bottom:8px">
+            <span class="muted small" style="flex:0 0 46px;padding-top:7px">${esc(sn || '其他')}</span>
+            <div class="chips grow">${S.allCourses.filter((c) => (c.subject && c.subject.name) === sn).map((c) => `
+              <label class="chip"><input type="checkbox" data-pub="${c.id}"${c.public ? ' checked' : ''}><span>${esc(c.name)}</span></label>`).join('')}</div>
+          </div>`).join('') : '<div class="muted small">还没有课程</div>'}
       </div>
       <div class="card">
         <div class="section-title mb">学校简介</div>
@@ -1493,6 +1505,19 @@
     async leaveNo(el) {
       try { await API.post(`/api/admin/leaves/${el.dataset.id}/reject`); toast('已标记为不准'); render(); }
       catch (e) { toast(e.message); }
+    },
+    async savePublicCourses(el) {
+      el.disabled = true;
+      try {
+        const boxes = [...document.querySelectorAll('[data-pub]')];
+        const changed = boxes.filter((b) => {
+          const c = S.allCourses.find((x) => String(x.id) === b.dataset.pub);
+          return c && !!c.public !== b.checked;
+        });
+        for (const b of changed) await API.put('/api/courses/' + b.dataset.pub, { public: b.checked });
+        toast(changed.length ? `已更新 ${changed.length} 门课程` : '没有改动');
+        render();
+      } catch (e) { toast(e.message, 2600); el.disabled = false; }
     },
     async saveContact(el) {
       const f = document.getElementById('ct-qr').files[0];
