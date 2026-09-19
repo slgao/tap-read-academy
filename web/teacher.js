@@ -284,6 +284,9 @@
         <button class="btn block" data-act="saveClass">${c ? '保存' : '创建班级'}</button>
       </div>
       ${c ? `<div class="card"><div class="row between"><div class="section-title">学生 ${ss.length} 人</div><span class="pill blue">邀请码 ${esc(c.inviteCode)}</span></div>
+        <div class="row mt" style="gap:8px"><button class="btn sm grow" data-act="bulkStudents" data-cls="${c.id}">+ 批量加学生</button>
+          <button class="btn sm ghost grow" data-go="studentnew" data-arg='${JSON.stringify({ newStuClass: c.id })}'>+ 建一个档案</button></div>
+        <div class="muted small mt">名单建好后，学生输邀请码就能点自己的名字进班，不用你逐个确认。</div>
         ${ss.map((st) => `<div class="row between" style="padding:7px 0;border-top:1px solid var(--line)"><span>${esc(st.name)}</span>
           <button class="btn sm danger" data-act="kickStudent" data-sid="${st.id}" data-name="${esc(st.name)}">移出</button></div>`).join('') || '<div class="muted small mt">还没有学生</div>'}
       </div>
@@ -550,7 +553,8 @@
 
   /* ---------- 学员名单 ---------- */
   const STUDENTS = {
-    top: () => `<h1><img src="brand/logo-96.png" alt="">学员</h1>${isAdmin() ? '<button class="btn sm" data-act="newStudent">+ 建档</button>' : ''}`, tab: true,
+    top: () => `<h1><img src="brand/logo-96.png" alt="">学员</h1>${isAdmin()
+      ? '<button class="btn sm grey" data-act="bulkStudents">批量</button><button class="btn sm" data-go="studentnew">+ 建档</button>' : ''}`, tab: true,
     body: async () => {
       const list = await API.get('/api/admin/students' + (S.stuQ ? '?q=' + encodeURIComponent(S.stuQ) : ''), 45000);
       const low = list.filter((x) => x.status === 'active' && x.leftHours > 0 && x.leftHours <= 4);
@@ -566,11 +570,39 @@
           </div>
           <div class="muted small mt">${[x.grade, x.school, x.classes.join('、')].filter(Boolean).map(esc).join(' · ') || '还没填档案'}</div>
           ${x.expiresAt ? `<div class="muted small">到期 ${esc(x.expiresAt)}</div>` : ''}
-        </div>`).join('') : '<div class="empty">还没有学员<br><span class="small">点右上角「+ 建档」，或让学生用邀请码加入班级</span></div>'}`;
+        </div>`).join('') : `<div class="empty">还没有学员<br><span class="small">点右上角「+ 建档」一个个加，或用「批量」把一串名字一次建好<br>建好名单后，学生输邀请码就能点自己的名字进班</span></div>`}`;
     },
     after: () => {
       const q = document.getElementById('stu-q');
       if (q) q.addEventListener('change', () => { S.stuQ = q.value.trim(); render(); });
+    },
+  };
+
+  /* ---------- 新建学员档案 ---------- */
+  const STUDENTNEW = {
+    top: () => `<button class="back" data-go="students">‹</button><h1>建档</h1>`, noTab: true,
+    body: async () => {
+      const classes = await API.get('/api/classes', 45000);
+      return `<div class="card">
+        <label class="field"><span>学员姓名（必填）</span><input id="s-name" placeholder="例如：李小明" autocomplete="off"></label>
+        <div class="field"><span>进哪个班（可不选，之后也能加）</span>
+          <div class="chips">${classes.map((c) => `<button class="fchip ${S.newStuClass === c.id ? 'on' : ''}" data-act="pickStuClass" data-id="${c.id}">${c.subject ? esc(c.subject.name) + ' · ' : ''}${esc(c.name)}</button>`).join('') || '<span class="muted small">还没有班级</span>'}</div></div>
+        <div class="of-grid2">
+          <label class="field"><span>性别</span><select id="s-gender"><option value=""></option><option>男</option><option>女</option></select></label>
+          <label class="field"><span>年级</span><input id="s-grade" value="${esc(S.newStuGrade || '')}" placeholder="三年级"></label>
+        </div>
+        <label class="field"><span>就读学校</span><input id="s-school" value="${esc(S.newStuSchool || '')}" placeholder="实验小学"></label>
+        <div class="of-grid2">
+          <label class="field"><span>家长姓名</span><input id="s-parent" placeholder="妈妈 / 爸爸"></label>
+          <label class="field"><span>家长手机</span><input id="s-phone" inputmode="tel" placeholder="13…"></label>
+        </div>
+        <label class="field"><span>备注</span><input id="s-note" placeholder="周六下午来"></label>
+        <div class="row" style="gap:8px">
+          <button class="btn grow" data-act="saveStudent" data-more="1">保存并加下一个</button>
+          <button class="btn ghost grow" data-act="saveStudent">保存并查看档案</button>
+        </div>
+        <div class="muted small mt">年级、学校、班级会记住，连着加同班同学很快。</div>
+      </div>`;
     },
   };
 
@@ -588,7 +620,8 @@
           <div class="right"><div class="bigscore">${d.hours.leftHours}<small> 课时</small></div>
             ${d.hours.expiresAt ? `<div class="muted small">${esc(d.hours.expiresAt)} 到期</div>` : ''}</div></div>
         <div class="hr"></div>
-        <div class="small">班级：${d.classes.map((c) => `${subjTag(c.subject)}${esc(c.name)}`).join(' ') || '还没进班'}</div>
+        <div class="row between"><div class="small grow">班级：${d.classes.map((c) => `${subjTag(c.subject)}${esc(c.name)}`).join(' ') || '还没进班'}</div>
+          ${admin ? `<button class="btn sm ghost" data-act="addToClass" data-id="${d.id}">加入班级</button>` : ''}</div>
         ${admin ? `<div class="small mt">家长：${esc(p.parentName || '—')} ${p.phone ? `<a href="tel:${esc(p.phone)}">${esc(p.phone)}</a>` : ''}</div>
         ${p.note ? `<div class="muted small mt">备注：${esc(p.note)}</div>` : ''}
         <div class="row mt" style="gap:8px"><button class="btn sm ghost" data-act="editStudent">修改资料</button>
@@ -1141,7 +1174,7 @@
     document.getElementById('app').appendChild(m);
   }
 
-  const VIEWS = { login: LOGIN, home: HOME, joins: JOINS, classes: CLASSES, classform: CLASSFORM, staff: STAFF, rewards: REWARDS,
+  const VIEWS = { login: LOGIN, home: HOME, joins: JOINS, studentnew: STUDENTNEW, classes: CLASSES, classform: CLASSFORM, staff: STAFF, rewards: REWARDS,
     students: STUDENTS, student: STUDENT, roll: ROLL, leaves: LEAVES, about: ABOUT, hwlist: HWLIST, hwnew: HWNEW, review: REVIEW, leads: LEADS, me: ME };
 
   /** 把页面上的评分栏读成一个对象；没打分就返回 null（后端会原样清空） */
@@ -1431,13 +1464,74 @@
       } catch (e) { toast(e.message); el.disabled = false; }
     },
     /* ---------- 教务档案 ---------- */
-    async newStudent() {
-      const name = (prompt('学员姓名') || '').trim();
-      if (!name) return;
+    pickStuClass(el) {
+      const id = Number(el.dataset.id);
+      S.newStuClass = S.newStuClass === id ? null : id;
+      [...document.querySelectorAll('[data-act="pickStuClass"]')].forEach((b) => {
+        b.classList.toggle('on', Number(b.dataset.id) === S.newStuClass);
+      });
+    },
+    async saveStudent(el) {
+      const v = (id) => (document.getElementById(id) || {}).value || '';
+      const name = v('s-name').trim();
+      if (!name) return toast('请填写学员姓名');
+      S.newStuGrade = v('s-grade').trim();
+      S.newStuSchool = v('s-school').trim();
+      el.disabled = true;
       try {
-        const st = await API.post('/api/admin/students', { name });
-        toast('已建档'); go('student', { stuId: st.id });
-      } catch (e) { toast(e.message, 2600); }
+        const st = await API.post('/api/admin/students', {
+          name, classId: S.newStuClass || null, gender: v('s-gender'),
+          grade: S.newStuGrade, school: S.newStuSchool,
+          parentName: v('s-parent').trim(), phone: v('s-phone').trim(), note: v('s-note').trim(),
+        });
+        if (el.dataset.more) { toast(`${name} 已建档，接着加下一个`, 2200); render(); }
+        else go('student', { stuId: st.id });
+      } catch (e) { toast(e.message, 3200); el.disabled = false; }
+    },
+    async addToClass(el) {
+      const classes = await API.get('/api/classes', 45000);
+      if (!classes.length) return toast('还没有班级');
+      pickList('加入哪个班？', classes.map((c) => ({ ...c, name: `${c.subject ? c.subject.name + ' · ' : ''}${c.name}` })), async (c) => {
+        try { await API.post(`/api/admin/students/${el.dataset.id}/classes`, { classId: c.id }); toast('已加入'); render(); }
+        catch (e) { toast(e.message, 2600); }
+      });
+    },
+    async bulkStudents(el) {
+      const classes = await API.get('/api/classes', 45000);
+      const pre = Number(el.dataset.cls) || S.clsId || 0;
+      const m = document.createElement('div');
+      m.className = 'poster-mask'; m.id = 'bulkbox';
+      m.innerHTML = `<div class="poster-sheet" role="dialog" aria-label="批量建档">
+          <div class="section-title">批量建档</div>
+          <div class="muted small">一行一个名字，也可以用逗号、顿号隔开。已经有的名字不会重复建。</div>
+          <label class="field" style="margin-top:10px"><span>学员姓名</span>
+            <textarea id="bk-names" rows="6" placeholder="王小明&#10;李小红&#10;张小军"></textarea></label>
+          <label class="field"><span>直接进哪个班</span>
+            <select id="bk-class"><option value="">先不进班</option>
+              ${classes.map((c) => `<option value="${c.id}"${c.id === pre ? ' selected' : ''}>${c.subject ? esc(c.subject.name) + ' · ' : ''}${esc(c.name)}</option>`).join('')}</select></label>
+          <label class="field"><span>年级（可不填，统一填给这批人）</span><input id="bk-grade" placeholder="三年级"></label>
+          <div class="row" style="gap:10px">
+            <button class="btn ghost grow" data-act="closeBulk">取消</button>
+            <button class="btn grow" data-act="doBulkStudents">建档</button>
+          </div>
+        </div>`;
+      m.addEventListener('click', (e) => { if (e.target === m) m.remove(); });
+      document.getElementById('app').appendChild(m);
+    },
+    closeBulk() { const m = document.getElementById('bulkbox'); if (m) m.remove(); },
+    async doBulkStudents(el) {
+      const names = document.getElementById('bk-names').value.trim();
+      if (!names) return toast('请先填名字');
+      el.disabled = true;
+      try {
+        const r = await API.post('/api/admin/students/bulk', {
+          names, classId: Number(document.getElementById('bk-class').value) || null,
+          grade: document.getElementById('bk-grade').value.trim(),
+        });
+        ACT.closeBulk();
+        toast(`新建 ${r.created.length} 人${r.existed.length ? `，${r.existed.length} 人已存在` : ''}`, 3000);
+        render();
+      } catch (e) { toast(e.message, 3000); el.disabled = false; }
     },
     async editStudent() {
       const p = (S.stu && S.stu.profile) || {};
