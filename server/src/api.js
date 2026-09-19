@@ -5,7 +5,7 @@
  */
 const repo = require('./repo');
 const store = require('./storage');
-const { ok, fail, readBody, rid, sha256, staffCode, encryptSecret, decryptSecret, today, dayKey, inviteCode } = require('./util');
+const { ok, fail, readBody, rid, sha256, staffCode, encryptSecret, decryptSecret, today, dayKey, now, inviteCode } = require('./util');
 const grading = require('./grading');
 const schedule = require('./schedule');
 
@@ -1811,13 +1811,14 @@ on('GET', '/api/admin/export/:kind', async (ctx) => {
     const subs = await repo.subjects.all();
     const cs = await repo.courses.all();
     const list = await repo.leads.list(500);
-    const rows = [['时间', '手机号', '年级', '科目', '想上的课', '家长留言', '来源', '状态', '跟进备注']];
+    const rows = [['时间', '手机号', '年级', '科目', '想上的课', '家长留言', '来源', '状态', '下次跟进', '试听日期', '最近联系', '跟进备注']];
     for (const l of list) {
       rows.push([l.createdAt, l.phone, l.grade,
         l.subjects.map((c) => (subs.find((x) => x.code === c) || {}).name).filter(Boolean).join(' '),
         l.courses.map((id) => (cs.find((x) => x.id === id) || {}).name).filter(Boolean).join(' '),
         l.message, l.source === 'share' ? `分享页${l.refName ? '（' + l.refName + '）' : ''}` : l.source === 'gallery' ? '作品展' : '预约页',
-        { new: '新咨询', contacted: '已联系', enrolled: '已报名', invalid: '无效' }[l.status] || l.status, l.note]);
+        { new: '待联系', contacted: '跟进中', trial: '已约试听', enrolled: '已报名', invalid: '无效' }[l.status] || l.status,
+        l.followAt, l.trialAt, l.lastContactAt, l.note]);
     }
     return sendCsv(ctx.res, `家长咨询_${stamp}`, rows);
   }
@@ -2040,15 +2041,35 @@ on('GET', '/api/admin/leads', async (ctx) => {
   const subs = await repo.subjects.all();
   const cs = await repo.courses.all();
   const list = await repo.leads.list();
-  ok(ctx.res, list.map((l) => ({ ...l,
-    subjectNames: l.subjects.map((c) => (subs.find((x) => x.code === c) || {}).name).filter(Boolean),
-    courseNames: l.courses.map((id) => (cs.find((x) => x.id === id) || {}).name).filter(Boolean) })));
+  const nowMs = Date.now();
+  const t = today();
+  const rows = list.map((l) => {
+    const created = Date.parse((l.createdAt || '').replace(' ', 'T') + '+08:00');
+    return { ...l,
+      subjectNames: l.subjects.map((c) => (subs.find((x) => x.code === c) || {}).name).filter(Boolean),
+      courseNames: l.courses.map((id) => (cs.find((x) => x.id === id) || {}).name).filter(Boolean),
+      waitingHours: Number.isNaN(created) ? null : Math.max(0, Math.round((nowMs - created) / 36e5)),
+      overdue: !!(l.followAt && l.followAt < t),                 // 约好的跟进日已经过了
+      dueToday: !!(l.followAt && l.followAt === t),
+      trialSoon: !!(l.trialAt && l.trialAt >= t),
+    };
+  });
+  const since30 = new Date(Date.now() - 30 * 86400e3).toISOString().replace('T', ' ').slice(0, 19);
+  ok(ctx.res, { list: rows, funnel: await repo.leads.funnel(since30) });
 }, { roles: ['admin'] });
+
+const LEAD_STATUS = ['new', 'contacted', 'trial', 'enrolled', 'invalid'];
 
 on('PUT', '/api/admin/leads/:id', async (ctx) => {
   const status = ctx.body.status;
-  if (status && !['new', 'contacted', 'enrolled', 'invalid'].includes(status)) return fail(ctx.res, 1001, '状态不对');
-  await repo.leads.update(ctx.params.id, { status, note: ctx.body.note });
+  if (status && !LEAD_STATUS.includes(status)) return fail(ctx.res, 1001, '状态不对');
+  const patch = { status, note: ctx.body.note };
+  const date = (v) => (v === '' ? '' : (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null));
+  if (ctx.body.followAt !== undefined) patch.followAt = date(ctx.body.followAt);
+  if (ctx.body.trialAt !== undefined) patch.trialAt = date(ctx.body.trialAt);
+  // 一标成「已联系 / 已约试听 / 已报名」就记下联系时间，等待时长从这里算
+  if (status && status !== 'new') patch.lastContactAt = now();
+  await repo.leads.update(ctx.params.id, patch);
   ok(ctx.res, { ok: true });
 }, { roles: ['admin'] });
 

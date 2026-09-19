@@ -762,40 +762,68 @@
     },
   };
 
-  /* ---------- 咨询：家长预约试听 ---------- */
-  const LEAD_ST = [['new', '新咨询'], ['contacted', '已联系'], ['enrolled', '已报名'], ['invalid', '无效']];
+  /* ---------- 咨询：按该做什么排序，先打该打的电话 ---------- */
+  const LEAD_ST = { new: '待联系', contacted: '跟进中', trial: '已约试听', enrolled: '已报名', invalid: '无效' };
+  const addDays = (n) => new Date(Date.now() + 8 * 3600 * 1000 + n * 86400000).toISOString().slice(0, 10);
+
   const LEADS = {
     top: () => `<button class="back" data-go="me">‹</button><h1>家长咨询</h1>`, noTab: true,
     body: async () => {
-      const [ps, leads] = await Promise.all([API.get('/api/admin/promo-stats', 20000), API.get('/api/admin/leads', 20000)]);
+      const [ps, d] = await Promise.all([API.get('/api/admin/promo-stats', 20000), API.get('/api/admin/leads', 20000)]);
+      const list = d.list || [];
+      const f = d.funnel || {};
       const src = (l) => (l.source === 'share' ? (l.refName ? `看了 ${esc(l.refName)} 的分享` : '来自分享页')
         : l.source === 'gallery' ? '来自书法作品展' : '来自预约试听页');
+      const todo = list.filter((l) => l.status === 'new').sort((a, b) => (b.waitingHours || 0) - (a.waitingHours || 0));
+      const due = list.filter((l) => l.status === 'contacted' && (l.overdue || l.dueToday));
+      const soon = list.filter((l) => l.status === 'contacted' && !l.overdue && !l.dueToday);
+      const trial = list.filter((l) => l.status === 'trial').sort((a, b) => String(a.trialAt || '9999').localeCompare(String(b.trialAt || '9999')));
+      const rest = list.filter((l) => l.status === 'enrolled' || l.status === 'invalid');
+
+      const card = (l, tone) => `<div class="card lead ${tone}">
+        <div class="row between">
+          <a class="strong lead-phone" href="tel:${esc(l.phone)}">${esc(l.phone.replace(/(\d{3})(\d{4})(\d{4})/, '$1 $2 $3'))}</a>
+          <span class="pill ${tone === 'urgent' ? 'todo' : tone === 'warn' ? 'warn' : tone === 'ok' ? 'ok' : ''}">${LEAD_ST[l.status]}</span>
+        </div>
+        <div class="small mt">${esc(l.grade || '')}${l.subjectNames.length ? ' · ' + l.subjectNames.map(esc).join('、') : ''}${l.courseNames && l.courseNames.length ? ' · ' + l.courseNames.map(esc).join('、') : ''}</div>
+        ${l.message ? `<div class="lead-msg">家长留言：${esc(l.message)}</div>` : ''}
+        <div class="muted small">${src(l)} · ${fmtDate(l.createdAt)}${l.status === 'new' && l.waitingHours != null
+          ? ` · ${l.waitingHours < 24 ? `等了 ${l.waitingHours} 小时` : `等了 ${Math.floor(l.waitingHours / 24)} 天`}` : ''}</div>
+        ${l.status === 'contacted' && l.followAt ? `<div class="muted small">${l.overdue ? '跟进已逾期：' : l.dueToday ? '今天要跟进：' : '下次跟进：'}${esc(l.followAt)}</div>` : ''}
+        ${l.status === 'trial' && l.trialAt ? `<div class="muted small">试听日期：${esc(l.trialAt)}</div>` : ''}
+        <div class="row mt" style="gap:6px;flex-wrap:wrap">
+          ${l.status === 'new' ? `<button class="btn sm" data-act="leadTo" data-id="${l.id}" data-st="contacted">已联系</button>` : ''}
+          ${l.status !== 'trial' && l.status !== 'enrolled' ? `<button class="btn sm sky" data-act="leadTo" data-id="${l.id}" data-st="trial">约试听</button>` : ''}
+          ${l.status !== 'enrolled' ? `<button class="btn sm mint" data-act="leadTo" data-id="${l.id}" data-st="enrolled">已报名</button>` : ''}
+          ${l.status !== 'invalid' ? `<button class="btn sm grey" data-act="leadTo" data-id="${l.id}" data-st="invalid">无效</button>` : ''}
+          ${l.status === 'contacted' || l.status === 'trial' ? `<button class="btn sm ghost" data-act="leadDate" data-id="${l.id}" data-st="${l.status}" data-cur="${esc(l.followAt || l.trialAt || '')}">改日期</button>` : ''}
+          <button class="btn sm ghost" data-act="leadNote" data-id="${l.id}" data-cur="${esc(l.note || '')}">${l.note ? '改备注' : '写备注'}</button>
+        </div>
+        ${l.note ? `<div class="muted small mt">备注：${esc(l.note)}</div>` : ''}
+      </div>`;
+      const group = (title, arr, tone, hint) => (arr.length
+        ? `<div class="row between mb mt"><div class="section-title">${title}</div><span class="pill ${tone === 'urgent' ? 'todo' : ''}">${arr.length}</span></div>
+           ${hint ? `<div class="muted small mb">${hint}</div>` : ''}${arr.map((l) => card(l, tone)).join('')}` : '');
+
       return `<div class="card">
-        <div class="section-title mb">近 7 天宣传效果</div>
-        <div class="minis"><div><b>${ps.last7.shares}</b><span>新分享</span></div><div><b>${ps.last7.views}</b><span>家长浏览</span></div><div><b>${ps.last7.leads}</b><span>预约试听</span></div></div>
-        ${ps.top.length ? `<div class="muted small mt mb">分享最多的同学</div>${ps.top.map((t, i) => `<div class="row between" style="padding:4px 0">
-          <span><i class="rank ${i < 3 ? 'top' : ''}">${i + 1}</i>${esc(t.name)}</span><span class="muted small">${t.shares} 份 · ${t.views || 0} 次浏览</span></div>`).join('')}` : ''}
+        <div class="section-title mb">近 30 天转化</div>
+        <div class="minis"><div><b>${f.total || 0}</b><span>咨询</span></div><div><b>${f.trials || 0}</b><span>约到试听</span></div>
+          <div><b>${f.enrolled || 0}</b><span>报名</span></div></div>
+        <div class="muted small mt">近 7 天：${ps.last7.shares} 次分享 · ${ps.last7.views} 人看过 · ${ps.last7.leads} 条预约</div>
         <div class="row mt" style="gap:8px">
           <a class="btn sm ghost grow" href="/gallery" target="_blank">书法作品展</a>
           <a class="btn sm ghost grow" href="/trial" target="_blank">预约试听页</a>
         </div>
-        <div class="muted small mt">这两个页面可以直接发到家长群、朋友圈。</div>
       </div>
-      <div class="row between mb"><div class="section-title">家长预约</div>${ps.newLeads ? `<span class="pill todo">${ps.newLeads} 条待联系</span>` : ''}</div>
-      ${leads.length ? leads.map((l) => `<div class="card lead ${l.status}">
-        <div class="row between">
-          <a class="strong lead-phone" href="tel:${esc(l.phone)}">${esc(l.phone.replace(/(\d{3})(\d{4})(\d{4})/, '$1 $2 $3'))}</a>
-          <select class="lead-st" data-lead-status="${l.id}" aria-label="跟进状态">${LEAD_ST.map(([k, t]) => `<option value="${k}"${l.status === k ? ' selected' : ''}>${t}</option>`).join('')}</select>
-        </div>
-        <div class="small mt">${esc(l.grade)}${l.subjectNames.length ? ' · ' + l.subjectNames.map(esc).join('、') : ''} · ${esc(l.contactTime || '都可以')}</div>
-        ${l.courseNames && l.courseNames.length ? `<div class="small">想上：${l.courseNames.map(esc).join('、')}</div>` : ''}
-        ${l.message ? `<div class="lead-msg">家长留言：${esc(l.message)}</div>` : ''}
-        <div class="muted small">${src(l)} · ${fmtDate(l.createdAt)}</div>
-        <div class="row mt" style="gap:8px">
-          <input class="grow" data-lead-note="${l.id}" value="${esc(l.note || '')}" placeholder="跟进备注，改完自动保存">
-          <button class="btn sm danger" data-act="leadDel" data-id="${l.id}">删除</button>
-        </div>
-      </div>`).join('') : `<div class="empty">还没有家长预约<br><span class="small">学生分享喜报、作品后，家长可以在分享页上预约试听</span></div>`}`;
+      ${todo.length || due.length ? `<div class="card tight warnbox"><div class="strong">今天要做</div>
+        <div class="small mt">${todo.length ? `${todo.length} 个新咨询要打电话` : ''}${todo.length && due.length ? '；' : ''}${due.length ? `${due.length} 个到期要跟进` : ''}</div></div>`
+        : '<div class="card tight muted small">新咨询都联系过了，跟进也没有逾期</div>'}
+      ${group('待联系', todo, 'urgent', '等得越久越靠前，趁热打')}
+      ${group('该跟进了', due, 'warn', '约好的日子到了')}
+      ${group('跟进中', soon, 'plain')}
+      ${group('已约试听', trial, 'blue', '提前一天提醒家长')}
+      ${group('已报名 / 无效', rest, 'dim')}
+      ${list.length ? '' : '<div class="empty">还没有家长预约<br><span class="small">学生分享喜报、作品后，家长可以在分享页上预约试听</span></div>'}`;
     },
   };
 
@@ -1530,6 +1558,33 @@
     async redCancel(el) {
       if (!confirm(`取消这次兑换？星星会退回给 ${el.dataset.name}`)) return;
       try { const r = await API.post(`/api/admin/redemptions/${el.dataset.id}/cancel`); toast(`已取消，退回 ${r.refunded} 颗星`); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async leadTo(el) {
+      const st = el.dataset.st;
+      const body = { status: st };
+      if (st === 'contacted') body.followAt = addDays(2);
+      if (st === 'trial') body.trialAt = addDays(2);
+      if (st === 'invalid' && !confirm('标记为无效？之后还能重新跟进。')) return;
+      try {
+        await API.put('/api/admin/leads/' + el.dataset.id, body);
+        toast({ contacted: '已标记联系，两天后提醒跟进', trial: '已约试听，可以点「改日期」调整',
+          enrolled: '恭喜，已报名', invalid: '已标记无效' }[st] || '已更新', 2600);
+        render();
+      } catch (e) { toast(e.message); }
+    },
+    async leadDate(el) {
+      const cur = el.dataset.cur || addDays(2);
+      const v = (prompt(el.dataset.st === 'trial' ? '试听日期（2026-09-25）' : '下次跟进日期（2026-09-25）', cur) || '').trim();
+      if (!v) return;
+      const body = el.dataset.st === 'trial' ? { trialAt: v } : { followAt: v };
+      try { await API.put('/api/admin/leads/' + el.dataset.id, body); toast('已更新'); render(); }
+      catch (e) { toast(e.message); }
+    },
+    async leadNote(el) {
+      const v = prompt('跟进记录（家长看不到）', el.dataset.cur || '');
+      if (v == null) return;
+      try { await API.put('/api/admin/leads/' + el.dataset.id, { note: v.trim() }); toast('已保存'); render(); }
       catch (e) { toast(e.message); }
     },
     async leadDel(el) {

@@ -290,26 +290,84 @@
     setTimeout(() => document.addEventListener('click', function off() { m.remove(); document.removeEventListener('click', off); }, { once: true }), 0);
   }
 
-  /* ---------------- 家长咨询 ---------------- */
-  const LEAD_ST = [['new', '新咨询'], ['contacted', '已联系'], ['enrolled', '已报名'], ['invalid', '无效']];
+  /* ---------------- 家长咨询：按“该做什么”分组，越急越靠前 ---------------- */
+  const LEAD_ST = { new: '待联系', contacted: '跟进中', trial: '已约试听', enrolled: '已报名', invalid: '无效' };
+  const addDays = (n) => new Date(Date.now() + 8 * 3600e3 + n * 86400e3).toISOString().slice(0, 10);
+  const waitText = (h) => (h == null ? '' : h < 1 ? '刚刚' : h < 24 ? `等了 ${h} 小时` : `等了 ${Math.floor(h / 24)} 天`);
+
+  function leadRow(l, tone) {
+    const tags = [...(l.subjectNames || []), ...(l.courseNames || [])].map(esc).join('、');
+    const src = l.source === 'share' ? `分享${l.refName ? '（' + esc(l.refName) + '）' : ''}` : l.source === 'gallery' ? '作品展' : '预约页';
+    return `<div class="lead-card ${tone}">
+      <div class="lead-main">
+        <a class="lead-phone" href="tel:${esc(l.phone)}">${esc(l.phone)}</a>
+        <span class="lead-meta">${esc(l.grade || '')}${tags ? ' · ' + tags : ''} · 来自${src} · ${fmtDate(l.createdAt)}</span>
+        ${l.message ? `<div class="lead-msg">家长留言：${esc(l.message)}</div>` : ''}
+      </div>
+      <div class="lead-side">
+        ${l.status === 'new' ? `<span class="lead-wait ${l.waitingHours >= 24 ? 'late' : ''}">${waitText(l.waitingHours)}</span>` : ''}
+        ${l.status === 'contacted' ? `<label class="lead-date ${l.overdue ? 'late' : l.dueToday ? 'today' : ''}">下次跟进
+          <input type="date" data-field="followAt" data-lead="${l.id}" value="${esc(l.followAt || '')}"></label>` : ''}
+        ${l.status === 'trial' ? `<label class="lead-date blue">试听日期
+          <input type="date" data-field="trialAt" data-lead="${l.id}" value="${esc(l.trialAt || '')}"></label>` : ''}
+      </div>
+      <div class="lead-acts">
+        ${l.status === 'new' ? `<button class="btn sm" data-act="leadTo" data-id="${l.id}" data-st="contacted">已联系</button>` : ''}
+        ${l.status !== 'trial' && l.status !== 'enrolled' ? `<button class="btn sm sky" data-act="leadTo" data-id="${l.id}" data-st="trial">约试听</button>` : ''}
+        ${l.status !== 'enrolled' ? `<button class="btn sm mint" data-act="leadTo" data-id="${l.id}" data-st="enrolled">已报名</button>` : ''}
+        ${l.status !== 'invalid' ? `<button class="btn sm grey" data-act="leadTo" data-id="${l.id}" data-st="invalid">无效</button>` : ''}
+        ${l.status === 'invalid' || l.status === 'enrolled' ? `<button class="btn sm ghost" data-act="leadTo" data-id="${l.id}" data-st="contacted">重新跟进</button>` : ''}
+      </div>
+      <input class="lead-note" data-field="note" data-lead="${l.id}" value="${esc(l.note || '')}" placeholder="跟进记录，改完自动保存">
+    </div>`;
+  }
+
+  function leadGroup(title, hint, list, tone, fold) {
+    if (!list.length) return '';
+    return `<details class="lead-group"${fold ? '' : ' open'}>
+      <summary><b>${title}</b><span class="pill ${tone === 'urgent' ? 'todo' : tone === 'warn' ? 'warn' : tone === 'ok' ? 'ok' : ''}">${list.length}</span>
+        <span class="muted small">${hint}</span></summary>
+      <div class="lead-list">${list.map((l) => leadRow(l, tone)).join('')}</div>
+    </details>`;
+  }
+
   async function viewLeads() {
-    const list = await API.get('/api/admin/leads');
-    return `<div class="of-bar"><div class="section-title grow">家长咨询（${list.length}）</div>
-      <button class="btn sm ghost" data-act="dl" data-kind="leads">导出咨询名单</button></div>
-    <div class="of-table"><table><thead><tr>
-      <th>时间</th><th>手机号</th><th>年级</th><th>想了解</th><th>家长留言</th><th>来源</th><th>状态</th><th>跟进备注</th>
-    </tr></thead><tbody>
-    ${list.map((l) => `<tr>
-      <td class="small">${fmtDate(l.createdAt)}</td>
-      <td><a href="tel:${esc(l.phone)}">${esc(l.phone)}</a></td>
-      <td>${esc(l.grade)}</td>
-      <td class="small">${[...(l.subjectNames || []), ...(l.courseNames || [])].map(esc).join('、')}</td>
-      <td class="small">${esc(l.message || '')}</td>
-      <td class="small">${l.source === 'share' ? `分享${l.refName ? '（' + esc(l.refName) + '）' : ''}` : l.source === 'gallery' ? '作品展' : '预约页'}</td>
-      <td><select class="lead-st" data-lead="${l.id}">${LEAD_ST.map(([k, t]) => `<option value="${k}"${l.status === k ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
-      <td><input class="lead-note" data-lead="${l.id}" value="${esc(l.note || '')}" placeholder="改完自动保存"></td>
-    </tr>`).join('') || '<tr><td colspan="8" class="empty">还没有家长预约</td></tr>'}
-    </tbody></table></div>`;
+    const d = await API.get('/api/admin/leads', 20000);
+    const list = d.list || [];
+    const f = d.funnel || {};
+    const pct = f.total ? Math.round((f.enrolled / f.total) * 100) : 0;
+
+    const isNew = (l) => l.status === 'new';
+    const overdue = (l) => l.status === 'contacted' && (l.overdue || l.dueToday);
+    const later = (l) => l.status === 'contacted' && !l.overdue && !l.dueToday;
+    const todo = list.filter(isNew).sort((a, b) => (b.waitingHours || 0) - (a.waitingHours || 0));      // 等得最久的排最前
+    const due = list.filter(overdue).sort((a, b) => String(a.followAt).localeCompare(String(b.followAt)));
+    const soon = list.filter(later).sort((a, b) => String(a.followAt).localeCompare(String(b.followAt)));
+    const trial = list.filter((l) => l.status === 'trial').sort((a, b) => String(a.trialAt || '9999').localeCompare(String(b.trialAt || '9999')));
+    const done = list.filter((l) => l.status === 'enrolled');
+    const dead = list.filter((l) => l.status === 'invalid');
+
+    return `<div class="of-bar">
+      <div class="section-title grow">家长咨询</div>
+      <span class="muted small">近 30 天</span>
+      <button class="btn sm ghost" data-act="dl" data-kind="leads">导出咨询名单</button>
+    </div>
+    <div class="funnel">
+      ${[['咨询', f.total || 0, ''], ['已联系', f.worked || 0, ''], ['约到试听', f.trials || 0, ''], ['报名', f.enrolled || 0, 'ok']]
+        .map(([label, n, tone], i) => `<div class="fn ${tone}"><b>${n}</b><span>${label}</span>${i < 3 ? '<i>→</i>' : ''}</div>`).join('')}
+      <div class="fn rate"><b>${pct}%</b><span>转化率</span></div>
+    </div>
+    ${todo.length || due.length ? `<div class="todo-bar">今天要做：
+      ${todo.length ? `<b>${todo.length}</b> 个新咨询待联系` : ''}${todo.length && due.length ? '，' : ''}
+      ${due.length ? `<b>${due.length}</b> 个到期要跟进` : ''}</div>` : '<div class="todo-bar done">新咨询都联系过了，跟进也没有逾期</div>'}
+
+    ${leadGroup('待联系', '刚留的电话趁热打，等得越久越排前面', todo, 'urgent')}
+    ${leadGroup('该跟进了', '约好的跟进日到了或已经过了', due, 'warn')}
+    ${leadGroup('跟进中', '按约定的日期排', soon, 'plain')}
+    ${leadGroup('已约试听', '试听日期近的排前面，记得提前一天提醒', trial, 'blue')}
+    ${leadGroup('已报名', '', done, 'ok', true)}
+    ${leadGroup('无效 / 暂不考虑', '', dead, 'dim', true)}
+    ${list.length ? '' : '<div class="empty">还没有家长预约</div>'}`;
   }
 
   /* ---------------- 事件 ---------------- */
@@ -324,12 +382,10 @@
 
   document.addEventListener('change', async (e) => {
     const el = e.target;
-    if (el.classList.contains('lead-st')) {
-      try { await API.put('/api/admin/leads/' + el.dataset.lead, { status: el.value }); toast('已更新'); }
-      catch (err) { toast(err.message); }
-    }
-    if (el.classList.contains('lead-note')) {
-      try { await API.put('/api/admin/leads/' + el.dataset.lead, { note: el.value.trim() }); toast('备注已保存'); }
+    if (el.dataset.lead && el.dataset.field) {
+      const body = {};
+      body[el.dataset.field] = el.dataset.field === 'note' ? el.value.trim() : el.value;
+      try { await API.put('/api/admin/leads/' + el.dataset.lead, body); toast('已保存'); if (el.type === 'date') render(); }
       catch (err) { toast(err.message); }
     }
   });
@@ -352,6 +408,21 @@
       S.extraDate = d;
       render();
       setTimeout(() => toast('在这一列的格子上点一下，选到课或请假', 3000), 400);
+    },
+    /** 一键改状态：顺手带上默认的跟进日 / 试听日，之后可以在行里直接改 */
+    async leadTo(el) {
+      const st = el.dataset.st;
+      const body = { status: st };
+      if (st === 'contacted') body.followAt = addDays(2);
+      if (st === 'trial') body.trialAt = addDays(2);
+      if (st === 'invalid' && !confirm('标记为无效？之后还能重新跟进。')) return;
+      el.disabled = true;
+      try {
+        await API.put('/api/admin/leads/' + el.dataset.id, body);
+        toast({ contacted: '已标记联系，两天后提醒跟进', trial: '已约试听，日期可在行里改',
+          enrolled: '恭喜，已报名', invalid: '已标记无效' }[st] || '已更新', 2600);
+        render();
+      } catch (err) { toast(err.message); el.disabled = false; }
     },
     async openStu(el) {
       const side = document.getElementById('side');

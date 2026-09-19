@@ -244,7 +244,7 @@ const TAG = '__e2e_' + Date.now();
   // 身份互换：老师升负责人、负责人降回老师
   await call('PUT', `/api/admin/teachers/${helper2.id}`, { role: 'admin' }, T.token);
   const asAdmin = await call('POST', '/api/auth/login', { role: 'teacher', name: helper2.name, teacherCode: helper2.code });
-  check('升为负责人后能看家长预约', asAdmin.user.role === 'admin' && Array.isArray(await call('GET', '/api/admin/leads', null, asAdmin.token)), asAdmin.user.role);
+  check('升为负责人后能看家长预约', asAdmin.user.role === 'admin' && Array.isArray((await call('GET', '/api/admin/leads', null, asAdmin.token)).list), asAdmin.user.role);
   const selfDemote = await expectFail('PUT', `/api/admin/teachers/${asAdmin.user.id}`, { role: 'teacher' }, asAdmin.token);
   check('不能改自己的身份', /不能改自己/.test(selfDemote || ''), selfDemote);
   await call('PUT', `/api/admin/teachers/${helper2.id}`, { role: 'teacher' }, T.token);
@@ -399,7 +399,8 @@ const TAG = '__e2e_' + Date.now();
   await call('POST', '/api/public/leads', { token: work.url.split('/').pop(), phone, grade: '三年级', subjects: ['calli', 'bogus'],
     courses: [courseId, 999999], message: '孩子周六上午方便', contactTime: '周末', agree: true });
   const dupLead = await call('POST', '/api/public/leads', { token: work.url.split('/').pop(), phone, grade: '三年级', agree: true });
-  const leadsList = await call('GET', '/api/admin/leads', null, T.token);
+  const leadsData = await call('GET', '/api/admin/leads', null, T.token);
+  const leadsList = leadsData.list;
   const myLead = leadsList.filter((l) => l.phone === phone);
   check('预约记录带来源学生、只保留合法科目、重复提交不重复记', myLead.length === 1 && myLead[0].refName === '李小明'
     && JSON.stringify(myLead[0].subjects) === '["calli"]' && dupLead.duplicate === true, myLead[0] && `${myLead[0].refName} ${myLead[0].subjectNames}`);
@@ -708,6 +709,29 @@ const TAG = '__e2e_' + Date.now();
 
   await call('DELETE', `/api/classes/${schedCls.id}`, null, T.token);
   await call('DELETE', `/api/courses/${newCourse.id}`, null, T.token);
+
+  log('\n[17] 家长咨询跟进流程');
+  const fPhone = '1390000' + String(Date.now()).slice(-4);
+  await call('POST', '/api/public/leads', { phone: fPhone, grade: '四年级', subjects: ['zh'], agree: true, source: 'trial' });
+  const fLead = (await call('GET', '/api/admin/leads', null, T.token)).list.find((l) => l.phone === fPhone);
+  check('新咨询默认待联系，并算出等了多久', fLead.status === 'new' && typeof fLead.waitingHours === 'number',
+    `${fLead.status} / ${fLead.waitingHours}h`);
+  await call('PUT', `/api/admin/leads/${fLead.id}`, { status: 'contacted', followAt: dayOf(-1) }, T.token);
+  let fAfter = (await call('GET', '/api/admin/leads', null, T.token)).list.find((l) => l.id === fLead.id);
+  check('跟进日过了会标成逾期，并记下联系时间', fAfter.overdue === true && !!fAfter.lastContactAt, `${fAfter.followAt} 逾期=${fAfter.overdue}`);
+  await call('PUT', `/api/admin/leads/${fLead.id}`, { status: 'trial', trialAt: dayOf(1) }, T.token);
+  fAfter = (await call('GET', '/api/admin/leads', null, T.token)).list.find((l) => l.id === fLead.id);
+  check('约到试听会记进漏斗', fAfter.status === 'trial' && fAfter.trialAt === dayOf(1), `${fAfter.status} ${fAfter.trialAt}`);
+  const funnelBefore = (await call('GET', '/api/admin/leads', null, T.token)).funnel;
+  await call('PUT', `/api/admin/leads/${fLead.id}`, { status: 'enrolled' }, T.token);
+  const funnelAfter = (await call('GET', '/api/admin/leads', null, T.token)).funnel;
+  check('报名后漏斗里的报名数 +1', funnelAfter.enrolled === funnelBefore.enrolled + 1,
+    `${funnelBefore.enrolled} → ${funnelAfter.enrolled}`);
+  const badStatus = await expectFail('PUT', `/api/admin/leads/${fLead.id}`, { status: '乱写' }, T.token);
+  check('状态只认这几种', /状态不对/.test(badStatus || ''), badStatus);
+  const leadCsv = await (await fetch(BASE + '/api/admin/export/leads', { headers: { Authorization: 'Bearer ' + T.token } })).text();
+  check('导出带上跟进日期和试听日期', leadCsv.includes('下次跟进,试听日期'), '');
+  await call('DELETE', `/api/admin/leads/${fLead.id}`, null, T.token);
 
   log('\n[7] 清理');
   const guarded = await expectFail('DELETE', `/api/admin/books/${book.id}`, null, T.token);

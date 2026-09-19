@@ -97,6 +97,7 @@ const toLead = (r) => r && ({
   grade: r.grade, subjects: parseJSON(r.subjects, []), courses: parseJSON(r.courses, []),
   contactTime: r.contact_time, status: r.status,
   message: r.message || '', note: r.note, createdAt: r.created_at,
+  followAt: r.follow_at || '', trialAt: r.trial_at || '', lastContactAt: r.last_contact_at || '',
 });
 const toCourse = (r) => r && ({ id: r.id, subjectId: r.subject_id, name: r.name, sort: r.sort, active: r.active });
 const toSubItem = (r) => r && ({
@@ -1038,9 +1039,22 @@ const leads = {
     return q(`SELECT l.*, u.name AS ref_name FROM leads l LEFT JOIN users u ON u.id=l.ref_student_id
               ORDER BY l.id DESC LIMIT ${num(limit)}`).all().map((r) => ({ ...toLead(r), refName: r.ref_name || '' }));
   },
-  async update(id, { status, note }) {
-    q('UPDATE leads SET status=COALESCE(?, status), note=COALESCE(?, note) WHERE id=?')
-      .run(status || null, note == null ? null : String(note), num(id));
+  async update(id, { status, note, followAt, trialAt, lastContactAt }) {
+    q(`UPDATE leads SET status=COALESCE(?, status), note=COALESCE(?, note),
+         follow_at=COALESCE(?, follow_at), trial_at=COALESCE(?, trial_at), last_contact_at=COALESCE(?, last_contact_at)
+       WHERE id=?`)
+      .run(status || null, note == null ? null : String(note),
+        followAt == null ? null : String(followAt), trialAt == null ? null : String(trialAt),
+        lastContactAt == null ? null : String(lastContactAt), num(id));
+  },
+  /** 漏斗统计：某段时间内的咨询、试听、报名 */
+  async funnel(since) {
+    const r = q(`SELECT COUNT(*) total,
+                   SUM(CASE WHEN status!='new' AND status!='invalid' THEN 1 ELSE 0 END) worked,
+                   SUM(CASE WHEN trial_at IS NOT NULL AND trial_at!='' THEN 1 ELSE 0 END) trials,
+                   SUM(CASE WHEN status='enrolled' THEN 1 ELSE 0 END) enrolled
+                 FROM leads WHERE created_at >= ?`).get(since);
+    return { total: r.total || 0, worked: r.worked || 0, trials: r.trials || 0, enrolled: r.enrolled || 0 };
   },
   async countSince(sinceDate) { return count('SELECT COUNT(*) n FROM leads WHERE created_at >= ?', sinceDate); },
   async countNew() { return count(`SELECT COUNT(*) n FROM leads WHERE status='new'`); },

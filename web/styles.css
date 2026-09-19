@@ -675,3 +675,46 @@ td.num.warn{color:var(--coral-shade);font-weight:800}
 .ct-qr{width:96px;height:96px;object-fit:contain;border-radius:12px;background:var(--paper);box-shadow:0 0 0 1px var(--line)}
 .ct-qr.none{display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text-3)}
 .fchip.sm{font-size:13px;padding:5px 11px}
+
+/* ---------- 家长咨询：转化漏斗与分组 ---------- */
+.funnel{display:flex;align-items:center;gap:10px;background:var(--paper);border-radius:var(--r);padding:14px 16px;
+  box-shadow:0 2px 0 var(--line);margin-bottom:12px;flex-wrap:wrap}
+.funnel .fn{position:relative;padding-right:22px;min-width:84px}
+.funnel .fn b{display:block;font:800 24px/1.2 var(--sans);color:var(--ink-deep)}
+.funnel .fn span{font-size:12.5px;color:var(--text-2)}
+.funnel .fn i{position:absolute;right:4px;top:8px;font-style:normal;color:var(--text-3)}
+.funnel .fn.ok b{color:var(--mint-shade)}
+.funnel .fn.rate{margin-left:auto;padding-right:0;text-align:right}
+.funnel .fn.rate b{color:var(--ink)}
+.todo-bar{background:var(--coral-wash);color:var(--coral-shade);border-radius:12px;padding:10px 14px;margin-bottom:14px;font-size:14px}
+.todo-bar b{font-size:16px}
+.todo-bar.done{background:var(--mint-wash);color:var(--mint-shade)}
+.lead-group{margin-bottom:12px}
+.lead-group > summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:6px 2px;font-size:15px}
+.lead-group > summary::-webkit-details-marker{display:none}
+.lead-group > summary::before{content:'▸';color:var(--text-3);transition:transform .15s}
+.lead-group[open] > summary::before{transform:rotate(90deg)}
+.lead-list{display:flex;flex-direction:column;gap:8px}
+.lead-card{display:grid;grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:'main side acts' 'note note note';
+  gap:10px 14px;align-items:center;background:var(--paper);border-radius:14px;padding:12px 14px;box-shadow:0 2px 0 var(--line)}
+.lead-card.urgent{box-shadow:0 2px 0 var(--line),inset 5px 0 0 var(--coral)}
+.lead-card.warn{box-shadow:0 2px 0 var(--line),inset 5px 0 0 var(--star)}
+.lead-card.blue{box-shadow:0 2px 0 var(--line),inset 5px 0 0 var(--sky)}
+.lead-card.ok{box-shadow:0 2px 0 var(--line),inset 5px 0 0 var(--mint)}
+.lead-card.dim{opacity:.6}
+.lead-main{grid-area:main;min-width:0}
+.lead-side{grid-area:side;text-align:right}
+.lead-acts{grid-area:acts;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.lead-card .lead-note{grid-area:note;width:100%;padding:7px 10px;font-size:13px;background:var(--wash);border-color:transparent}
+.lead-card .lead-phone{font:800 19px var(--sans);color:var(--ink);text-decoration:none;letter-spacing:.02em}
+.lead-meta{display:block;font-size:12.5px;color:var(--text-2);margin-top:2px}
+.lead-card .lead-msg{margin-top:6px;font-size:13.5px;color:var(--text);background:var(--wash);border-radius:10px;padding:6px 9px}
+.lead-wait{font-size:13px;color:var(--text-2);white-space:nowrap}
+.lead-wait.late{color:var(--coral-shade);font-weight:800}
+.lead-date{display:block;font-size:11.5px;color:var(--text-3);white-space:nowrap}
+.lead-date input{width:auto;padding:5px 8px;font-size:13px;margin-top:2px}
+.lead-date.late{color:var(--coral-shade)} .lead-date.late input{border-color:var(--coral)}
+.lead-date.today{color:#8A5A00} .lead-date.today input{border-color:var(--star)}
+.lead-date.blue input{border-color:var(--sky)}
+@media(max-width:900px){.lead-card{grid-template-columns:1fr;grid-template-areas:'main' 'side' 'acts' 'note'}
+  .lead-side,.lead-acts{text-align:left;justify-content:flex-start}}

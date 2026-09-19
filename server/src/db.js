@@ -417,6 +417,11 @@ CREATE INDEX IF NOT EXISTS idx_redemption_status ON redemptions(status, id);
 CREATE INDEX IF NOT EXISTS idx_redemption_student ON redemptions(student_id, id);
 `);
 
+// 跟进用：下次跟进日期、约好的试听日期、最近一次联系时间
+addColumn('leads', 'follow_at', 'TEXT');
+addColumn('leads', 'trial_at', 'TEXT');
+addColumn('leads', 'last_contact_at', 'TEXT');
+
 // 家长在预约表单里写的话（和老师自己的跟进备注 note 分开存）
 addColumn('leads', 'message', 'TEXT');
 addColumn('leads', 'courses', 'TEXT');           // JSON：具体想上的课程
