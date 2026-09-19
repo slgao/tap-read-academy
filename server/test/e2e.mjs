@@ -756,20 +756,21 @@ const TAG = '__e2e_' + Date.now();
   check('不是 SVG 的内容被拒', /格式不对/.test(badSvg || ''), badSvg);
 
   log('\n[19] 入班要老师确认，防止乱加名字');
+  const dev = (x) => `dev${TAG.slice(-6)}${x}`;   // 每次跑用不同的设备号，别被上一轮的限额挡住
   const joinCls = await call('POST', '/api/classes', { subjectId: enX.id, gradeBand: '初中', name: TAG + ' 入班测试班' }, T.token);
   // 老师先建好名单：学生进来点自己的名字，不用确认
   const listed = await call('POST', '/api/admin/students', { name: TAG + '名单里的', classId: joinCls.id }, T.token);
   const joinPreview = await call('POST', '/api/classes/preview', { inviteCode: joinCls.inviteCode });
   check('输邀请码能看到还没人认领的名字', joinPreview.names.some((n) => n.id === listed.id), joinPreview.names.map((n) => n.name).join('、'));
-  const claimed = await call('POST', '/api/auth/claim', { inviteCode: joinCls.inviteCode, studentId: listed.id, device: 'devA' });
+  const claimed = await call('POST', '/api/auth/claim', { inviteCode: joinCls.inviteCode, studentId: listed.id, device: dev('A') });
   check('点名单上的名字直接进班', claimed.join.status === 'active', claimed.join.status);
   const joinPreview2 = await call('POST', '/api/classes/preview', { inviteCode: joinCls.inviteCode });
   check('认领过的名字不再出现在名单里', !joinPreview2.names.some((n) => n.id === listed.id), `${joinPreview2.names.length} 个名字待认领`);
-  const stolen = await expectFail('POST', '/api/auth/claim', { inviteCode: joinCls.inviteCode, studentId: listed.id, device: 'devB' });
+  const stolen = await expectFail('POST', '/api/auth/claim', { inviteCode: joinCls.inviteCode, studentId: listed.id, device: dev('B') });
   check('别的手机点同一个名字会被挡住', /已经有人在用/.test(stolen || ''), stolen);
 
   // 名单里没有的名字：进待确认队列
-  const naughty = await call('POST', '/api/auth/login', { role: 'student', name: TAG + '捣蛋鬼', inviteCode: joinCls.inviteCode, device: 'devC' });
+  const naughty = await call('POST', '/api/auth/login', { role: 'student', name: TAG + '捣蛋鬼', inviteCode: joinCls.inviteCode, device: dev('C') });
   check('乱报的名字只能挂起等确认', naughty.join.status === 'pending', naughty.join.status);
   const joinRoster = await call('GET', `/api/classes/${joinCls.id}/students`, null, T.token);
   check('没确认前不进名单、也不占人数', !joinRoster.some((m) => /捣蛋鬼/.test(m.name)), `名单 ${joinRoster.length} 人`);
@@ -787,7 +788,7 @@ const TAG = '__e2e_' + Date.now();
   const sockPuppets = [];
   for (let i = 0; i < 4 && !joinBlocked; i++) {
     const nm = `${short}小号${i}`;
-    joinBlocked = await expectFail('POST', '/api/auth/login', { role: 'student', name: nm, inviteCode: joinCls.inviteCode, device: 'devC' });
+    joinBlocked = await expectFail('POST', '/api/auth/login', { role: 'student', name: nm, inviteCode: joinCls.inviteCode, device: dev('C') });
     if (!joinBlocked) sockPuppets.push(nm);
   }
   check('同一台手机一天建太多账号会被拦', /账号太多/.test(joinBlocked || ''), joinBlocked);
@@ -799,7 +800,7 @@ const TAG = '__e2e_' + Date.now();
   check('同一条申请不能重复处理', /处理过/.test(twice || ''), twice);
 
   // 拒绝：申请删掉，空账号一并清理
-  const ghost = await call('POST', '/api/auth/login', { role: 'student', name: TAG + '路人', inviteCode: joinCls.inviteCode, device: 'devD' });
+  const ghost = await call('POST', '/api/auth/login', { role: 'student', name: TAG + '路人', inviteCode: joinCls.inviteCode, device: dev('D') });
   await call('POST', `/api/admin/join-requests/${joinCls.id}/${ghost.user.id}/reject`, {}, T.token);
   const joinGone = await expectFail('GET', '/api/me', null, ghost.token);
   check('拒绝后空账号被清掉', /未登录|登录已过期/.test(joinGone || ''), joinGone);
