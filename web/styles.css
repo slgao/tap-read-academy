@@ -385,7 +385,8 @@ body.pub{align-items:flex-start}
 .chip{position:relative;cursor:pointer}
 .chip input{position:absolute;opacity:0;pointer-events:none}
 .chip span{display:inline-block;padding:7px 14px;border-radius:999px;background:var(--wash);color:var(--text-2);font-weight:700;font-size:14px}
-.chip input:checked + span{color:#fff;background:var(--ink)}
+.chip span{transition:background .12s,color .12s,box-shadow .12s}
+.chip input:checked + span{color:#fff;background:var(--ink);box-shadow:0 2px 0 rgba(28,17,71,.18)}
 .chip.sky input:checked + span{background:var(--sky)} .chip.coral input:checked + span{background:var(--coral)}
 .chip.mint input:checked + span{background:var(--mint)} .chip.star input:checked + span{background:var(--star);color:#5C3B00}
 .chip input:focus-visible + span{outline:3px solid var(--sky);outline-offset:2px}
@@ -527,7 +528,9 @@ div.field > span{display:block;font-size:13px;font-weight:700;color:var(--text-2
 .chip.sm span{padding:5px 11px;font-size:13px;font-weight:600}
 .chip.sm input:checked + span{background:var(--ink);color:#fff}
 .pub-slogan{margin:16px 0 2px;text-align:center;font-family:var(--serif);font-size:17px;letter-spacing:.08em;color:var(--ink)}
-.subj.ink,.chip.ink input:checked + span{background:var(--wash);color:var(--ink)}
+/* 作业班用品牌深紫：小标签是浅底深字，选中时是深底白字，和其他科目一样醒目 */
+.subj.ink{background:var(--wash);color:var(--ink)}
+.chip.ink input:checked + span{background:var(--ink);color:#fff}
 .fchip.ink.on{background:var(--ink);color:#fff;box-shadow:0 2px 0 var(--ink-shade)}
 .card.cls.ink{box-shadow:0 2px 0 var(--line),inset 4px 0 0 var(--ink)}
 .group-title.ink::before{background:var(--ink)}
