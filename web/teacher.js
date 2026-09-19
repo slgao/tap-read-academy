@@ -237,7 +237,7 @@
     top: () => `<button class="back" data-go="classes">‹</button><h1>${S.clsId ? '管理班级' : '新建班级'}</h1>`, noTab: true,
     body: async () => {
       const [meta, cs] = await Promise.all([API.get('/api/meta', 300000), API.get('/api/classes', 45000)]);
-      const subj = meta, bands = meta.gradeBands;
+      const subj = meta, suggest = meta.gradeSuggest || [{ group: '常用', items: meta.gradeBands || [] }];
       const c = S.clsId ? cs.find((x) => x.id === S.clsId) : null;
       if (S.clsId && !c) return `<div class="empty">班级不存在</div>`;
       const ss = c ? await API.get(`/api/classes/${c.id}/students`) : [];
@@ -262,7 +262,14 @@
         <div class="field"><span>科目${!isAdmin() && myIds.length ? '（你教的科目）' : ''}</span>
           <div class="chips">${subjList.map((x) => `<label class="chip ${esc(x.color)}"><input type="radio" name="c-subj" value="${x.id}"${x.id === subId ? ' checked' : ''}><span>${esc(x.name)}</span></label>`).join('')}</div>
           ${!isAdmin() && !myIds.length ? '<div class="muted small mt">负责人还没给你设科目，现在可以选全部</div>' : ''}</div>
-        <div class="field"><span>年级段</span><div class="chips">${bands.map((b) => `<label class="chip"><input type="radio" name="c-band" value="${esc(b)}"${c && c.gradeBand === b ? ' checked' : ''}><span>${esc(b)}</span></label>`).join('')}</div></div>
+        <label class="field"><span>年级 / 层次（可不填，也可以自己写，比如「三到五年级」「周末提高班」）</span>
+          <input id="c-band" value="${c ? esc(c.gradeBand || '') : ''}" maxlength="12" placeholder="不填也行"></label>
+        <div class="field" style="margin-top:-6px">
+          ${suggest.map((g) => `<div class="row" style="gap:6px;align-items:flex-start;margin-bottom:6px">
+            <span class="muted small" style="flex:0 0 42px;padding-top:7px">${esc(g.group)}</span>
+            <div class="chips grow">${g.items.map((b) => `<button class="fchip sm" data-act="pickBand" data-v="${esc(b)}">${esc(b)}</button>`).join('')}</div>
+          </div>`).join('')}
+        </div>
         <div class="field"><span>课程（科目下面的具体课，可不选）</span>
           <div id="course-box">${courseChips(subj.subjects, S.formSubj, S.formCourse)}</div></div>
         <div class="field"><span>上课时间（选了之后，教务台会把今天有课的班排在最前面）</span>
@@ -1177,6 +1184,12 @@
         render();
       } catch (e) { toast(e.message, 3200); el.disabled = false; }
     },
+    pickBand(el) {
+      const input = document.getElementById('c-band');
+      if (!input) return;
+      input.value = input.value.trim() === el.dataset.v ? '' : el.dataset.v;   // 再点一次就清空
+      input.focus();
+    },
     pickCourse(el) {
       const id = Number(el.dataset.id);
       S.formCourse = S.formCourse === id ? null : id;
@@ -1205,12 +1218,11 @@
     },
     async saveClass(el) {
       const sub = document.querySelector('input[name="c-subj"]:checked');
-      const band = document.querySelector('input[name="c-band"]:checked');
       if (!sub) return toast('请选科目');
-      if (!band) return toast('请选年级段');
+      const band = document.getElementById('c-band');
       const tSel = document.getElementById('c-teacher');
       const days = [...document.querySelectorAll('[data-week]:checked')].map((x) => Number(x.dataset.week));
-      const body = { subjectId: Number(sub.value), gradeBand: band.value, name: document.getElementById('c-name').value.trim(),
+      const body = { subjectId: Number(sub.value), gradeBand: band.value.trim(), name: document.getElementById('c-name').value.trim(),
         courseId: S.formCourse || null,
         schedule: days.length ? { days, start: document.getElementById('c-start').value, end: document.getElementById('c-end').value } : null };
       if (tSel) body.teacherId = Number(tSel.value);

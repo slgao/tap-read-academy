@@ -674,3 +674,4 @@ td.num.warn{color:var(--coral-shade);font-weight:800}
 .contact-qr span{display:block;font-size:12px;margin-top:6px}
 .ct-qr{width:96px;height:96px;object-fit:contain;border-radius:12px;background:var(--paper);box-shadow:0 0 0 1px var(--line)}
 .ct-qr.none{display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text-3)}
+.fchip.sm{font-size:13px;padding:5px 11px}

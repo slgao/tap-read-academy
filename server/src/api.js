@@ -185,7 +185,14 @@ on('GET', '/api/me', async (ctx) => {
 
 /* 班级 */
 /** 年级段：同一科目按年级段分班 */
-const GRADE_BANDS = ['一二年级', '三四年级', '五六年级', '初中', '不分年级'];
+/* 年级/层次只是给班级贴个标签，机构的分法五花八门（按年级、按程度、按考级），
+ * 所以这里不做固定选项，只给点常用的建议，老师想怎么写就怎么写，也可以不写。 */
+const GRADE_SUGGEST = [
+  { group: '常用', items: ['一二年级', '三四年级', '五六年级', '初中', '不分年级'] },
+  { group: '按年级', items: ['幼小衔接', '一年级', '二年级', '三年级', '四年级', '五年级', '六年级', '初一', '初二', '初三'] },
+  { group: '按程度', items: ['启蒙班', '基础班', '提高班', '冲刺班', '考级班'] },
+];
+const GRADE_BANDS = GRADE_SUGGEST.flatMap((g) => g.items);
 
 /** 老师只能看自己带的班，学生只能看自己在的班；admin 不限 */
 async function canTouchClass(user, classId) {
@@ -227,7 +234,7 @@ on('GET', '/api/classes', async (ctx) => {
   }
   // 按科目、年级段排好，界面直接分组显示
   const sortOf = (r) => (subs.find((x) => r.subject && x.id === r.subject.id) || { sort: 99 }).sort;
-  const band = (r) => { const i = GRADE_BANDS.indexOf(r.gradeBand); return i < 0 ? 99 : i; };
+  const band = (r) => { const i = GRADE_BANDS.indexOf(r.gradeBand); return i < 0 ? 99 : i; };   // 认识的排前面，自定义的排后面
   rows.sort((a, b) => sortOf(a) - sortOf(b) || band(a) - band(b) || a.id - b.id);
   ok(ctx.res, rows);
 });
@@ -240,7 +247,7 @@ on('GET', '/api/meta', async (ctx) => {
   const subjects = (await repo.subjects.all()).map((x) => ({ ...subjectView(x),
     courses: cs.filter((c) => c.subjectId === x.id).map((c) => ({ id: c.id, name: c.name })) }));
   const mine = ctx.user.role === 'student' ? [] : await repo.subjects.idsForTeacher(ctx.user.id);
-  ok(ctx.res, { subjects, mine, gradeBands: GRADE_BANDS });
+  ok(ctx.res, { subjects, mine, gradeBands: GRADE_BANDS, gradeSuggest: GRADE_SUGGEST });
 });
 
 /** 校验班级表单；班名不填时按「年级段 + 科目 + 班」自动起名 */
@@ -258,13 +265,12 @@ async function classForm(body, user) {
     const mine = await repo.subjects.idsForTeacher(user.id);
     if (mine.length && !mine.includes(subject.id)) return { error: `你教的科目里没有「${subject.name}」，请让负责人先加上` };
   }
-  const gradeBand = String(body.gradeBand || '');
-  if (!GRADE_BANDS.includes(gradeBand)) return { error: '请选择年级段' };
+  const gradeBand = String(body.gradeBand || '').trim().slice(0, 12);   // 自己随便写，不写也行
   const sched = schedule.clean(body.schedule);
   const course = courseId ? await repo.courses.byId(courseId) : null;
   // 不填班名就按「年级段 + 课程（或科目）+ 班」自动起，比如「三四年级新概念英语班」
-  const name = String(body.name || '').trim().slice(0, 30)
-    || `${gradeBand === '不分年级' ? '' : gradeBand}${course ? course.name : subject.name}班`;
+  const label = (gradeBand && gradeBand !== '不分年级') ? gradeBand : '';
+  const name = String(body.name || '').trim().slice(0, 30) || `${label}${course ? course.name : subject.name}班`;
   return { subject, gradeBand, name, courseId, schedule: sched };
 }
 

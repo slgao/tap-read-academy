@@ -277,8 +277,11 @@ const TAG = '__e2e_' + Date.now();
   check('四个科目', ['en', 'zh', 'math', 'calli'].every((c) => subj.subjects.some((x) => x.code === c)), subj.subjects.map((x) => x.name).join('、'));
 
   // 机构按科目开班、同科目按年级段分班；学生可以同时在几个科目的班里
-  const badCls = await expectFail('POST', '/api/classes', { subjectId: math.id, gradeBand: '高中' }, T.token);
-  check('建班：年级段不对被拒', /年级段/.test(badCls || ''), badCls);
+  const freeBand = await call('POST', '/api/classes', { subjectId: math.id, gradeBand: '三到五年级', name: TAG + ' 自定义年级班' }, T.token);
+  check('年级段可以自己写', freeBand.gradeBand === '三到五年级', freeBand.gradeBand);
+  const noBand = await call('POST', '/api/classes', { subjectId: math.id, name: TAG + ' 不填年级班' }, T.token);
+  check('年级段可以不填', noBand.gradeBand === '', `「${noBand.gradeBand}」`);
+  for (const c of [freeBand, noBand]) await call('DELETE', `/api/classes/${c.id}`, null, T.token);
   const mathCls = await call('POST', '/api/classes', { subjectId: math.id, gradeBand: '三四年级' }, T.token);
   const calliCls = await call('POST', '/api/classes', { subjectId: calli.id, gradeBand: '不分年级', name: TAG + ' 书法周六班' }, T.token);
   check('建班：不填班名自动起名', mathCls.name === '三四年级数学班' && mathCls.subject.code === 'math', mathCls.name);
